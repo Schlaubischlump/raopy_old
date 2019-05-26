@@ -3,7 +3,6 @@ Main AirTunes class to register devices and start playback.
 """
 from enum import Enum
 
-from raopy.config import REF_SEQ
 from .udp import UDPServer
 from .audio import AudioSync
 
@@ -32,12 +31,13 @@ class AirTunes(object):
         self.status = STATUS.STOPPED
 
     # region audio sync callbacks
-    def need_sync(self, last_seq):
+    def need_sync(self, last_seq, is_first):
         """
         Called whenever control packets to all clients should be send.
         :param last_seq: last sequence number
+        :param is_first: is this package the first to send after play or resume
         """
-        self._udp_servers.send_control_sync(last_seq)
+        self._udp_servers.send_control_sync(last_seq, is_first)
     # endregion
 
     # region connect/disconnect
@@ -131,11 +131,10 @@ class AirTunes(object):
         if not self.status == STATUS.PAUSED:
             return False
 
-        seq = REF_SEQ
         # Fix the current connection if a teardown was sent in the meantime
         for receiver in self._devices:
             # We have to start over with the first seq number
-            receiver.repair_connection(seq)
+            receiver.repair_connection(self._audio_sync.last_seq)
 
         self._audio_sync.resume_streaming()
         self.status = STATUS.PLAYING

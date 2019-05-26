@@ -99,3 +99,10 @@ class UnsupportedCodecError(Exception):
     Thrown when an unsupported codec type is specified.
     """
     pass
+
+
+class UnsupportedFileType(Exception):
+    """
+    Thrown when the given file type is not supported.
+    """
+    pass

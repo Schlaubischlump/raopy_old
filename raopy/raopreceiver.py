@@ -3,6 +3,7 @@ from __future__ import print_function
 import socket
 from logging import getLogger
 
+from .config import SAMPLING_RATE, FRAMES_PER_PACKET
 from .rtsp import RTSPStatus, RTSPClient, RAOPCrypto, RAOPCodec
 from .util import binary_ip_to_string
 
@@ -31,6 +32,9 @@ class RAOPReceiver(object):
         # listen for callback events from the RTSPClient
         self._rtsp_client.on_connection_ready += self.connection_ready
         self._rtsp_client.on_connection_closed += self.connection_closed
+
+        # save the packages of the last two seconds to allow resume
+        packets_per_second = SAMPLING_RATE // FRAMES_PER_PACKET
 
     def __str__(self):
         return "<{0}>: name={1}, address={2}:{3}, server={4}".format(self.__class__.__name__,

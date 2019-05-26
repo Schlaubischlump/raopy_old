@@ -1,7 +1,46 @@
-from struct import pack
+from struct import unpack_from, pack
 
 from ..rtp import RtpHeader
 from ..util import NtpTime, low16
+
+CONTROL_RANGE_RESEND = 0x55
+
+
+class ResendPacket(object):
+    __slots__ = ["rtp_header", "missed_seqnum", "count", "_data"]
+
+    def __init__(self):
+        self.rtp_header = None
+        self.missed_seqnum = 0
+        self.count = 0
+        self._data = None
+
+    @classmethod
+    def parse(cls, data):
+        """
+        Parse the raw data into a timing packet.
+        :param data: raw data received from udp server
+        :return: timing packet instance or None when an error occurs while parsing
+        """
+        try:
+            # create timing packet
+            control_packet = cls()
+            control_packet.rtp_header = RtpHeader(*unpack_from(">BBH", data, 0))
+
+            # malformed data
+            if control_packet.rtp_header.payload_type != CONTROL_RANGE_RESEND:
+                return None
+
+            control_packet.missed_seqnum = unpack_from(">H", data, 4)[0]
+            control_packet.count = unpack_from(">H", data, 6)[0]
+            control_packet._data = data
+            return control_packet
+        except Exception as e:
+            return None
+
+    def __repr__(self):
+        return "RTPHeader: {0}\nmissed_seqnum: {1}\ncount: {2}\n".format(self.rtp_header, self.missed_seqnum,
+                                                                         self.count)
 
 
 class SyncPacket(object):

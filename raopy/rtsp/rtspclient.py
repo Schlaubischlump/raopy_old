@@ -251,8 +251,8 @@ class RTSPClient(object):
         header = self._get_default_header()
         req = RTSPRequest(self.default_uri, "TEARDOWN", header, digest_info=digest_info)
         res = self.send_and_recv(req)
-        print(res)
-        # Todo: return something
+
+        return res.code == 200
 
     def flush(self, last_seq, digest_info=None):
         """
@@ -275,10 +275,10 @@ class RTSPClient(object):
 
             req = RTSPRequest(self.default_uri, "FLUSH", header, digest_info=digest_info)
             res = self.send_and_recv(req)
-            return res.code == 200
 
             self.status = RTSPStatus.PLAYING
-            # Todo: return something
+
+            return res.code == 200
 
     def set_volume(self, vol, digest_info=None):
         """

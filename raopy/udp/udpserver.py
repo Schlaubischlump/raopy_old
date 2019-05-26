@@ -10,9 +10,9 @@ from select import select
 from threading import Thread
 
 from ..util import NtpTime, low32
-from ..config import FRAMES_PER_PACKET, SAMPLING_RATE, REF_SEQ
+from ..config import FRAMES_PER_PACKET, SAMPLING_RATE
 from .timingpacket import TIMING_PACKET_SIZE, TimingPacket
-from .controlpacket import SyncPacket
+from .controlpacket import SyncPacket, ResendPacket
 
 timing_logger = getLogger("TimingLogger")
 control_logger = getLogger("ControlLogger")
@@ -85,10 +85,11 @@ class UDPServer(object):
             return True
         return False
 
-    def send_control_sync(self, seq):
+    def send_control_sync(self, seq, is_first):
         """
         Send a control packet to all registered devices.
         :param seq: sequence number
+        :param is_first: is the package the first control package
         """
         for device in self._hosts.values():
             if not device.control_port:
@@ -96,18 +97,14 @@ class UDPServer(object):
 
             latency = SAMPLING_RATE*2
             now = low32(seq*FRAMES_PER_PACKET + latency)
-            sync_packet = SyncPacket.create(is_first=(seq == REF_SEQ),
+            sync_packet = SyncPacket.create(is_first=is_first,
                                             now_minus_latency=now - latency,
                                             now=now,
                                             time_last_sync=NtpTime.get_timestamp())
 
-
-            #sync_packet = SyncPacket.create(is_first=is_first,
-            #                                now_minus_latency=low32(seq*FRAMES_PER_PACKET),
-            #                                time_last_sync=NtpTime.get_timestamp(),
-            #                                now=seq*FRAMES_PER_PACKET + SAMPLING_RATE*2)
-            control_logger.debug("Send control packet:\n\033[91m{0}\033[0m".format(sync_packet))
-            self.control.socket.sendto(sync_packet.to_data(), (device.ip, device.control_port))
+            dest = (device.ip, device.control_port)
+            control_logger.debug("Send control packet tp {0}:\n\033[91m{1}\033[0m".format(dest, sync_packet))
+            self.control.socket.sendto(sync_packet.to_data(), dest)
 
     def close(self):
         self._is_listening = False
@@ -142,14 +139,14 @@ class UDPServer(object):
                 response = TimingPacket.parse(data)
 
                 if not response:
-                    timing_logger.warning("Skipping malformed packet.")
+                    timing_logger.warning("Skipping malformed timing packet from {0}.".format(addr))
                     continue
-                timing_logger.debug("Received timing packet:\n\033[94m{0}\033[0m".format(response))
+                timing_logger.debug("Received timing packet from {0}:\n\033[94m{1}\033[0m".format(addr, response))
 
                 # send responds to timing packets
                 request = TimingPacket.create(reference_time=response.send_time, received_time=NtpTime.get_timestamp(),
                                               send_time=NtpTime.get_timestamp())
-                timing_logger.debug("Send timing packet:\n\033[91m{0}\033[0m".format(request))
+                timing_logger.debug("Send timing packet to {0}:\n\033[91m{1}\033[0m".format(addr, request))
                 self.timing.socket.sendto(request.to_data(), addr)
 
         def listen_control():
@@ -159,7 +156,10 @@ class UDPServer(object):
             while self._is_listening:
                 select([self.control.socket], [], [])
                 data, addr = self.control.socket.recvfrom(1024)
-                #print(data)
+                response = ResendPacket.parse(data)
+                if not response:
+                    control_logger.warning("Skipping malformed control packet from {0}.".format(addr))
+                control_logger.debug("Received control packet from {0}:\n\033[94m{1}\033[0m".format(addr, response))
 
         # Start a background thread,
         t = Thread(target=listen_timing)

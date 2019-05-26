@@ -4,15 +4,15 @@ Available Events:
 - on_need_sync(seq_num)
 """
 from threading import Timer
+from random import randint
 
-import audiotools
+from .audiofile import AudioFile
 
 from ..rtsp import RAOPCrypto
 from ..audio.audiopacket import AudioPacket
-from ..audio.circularbuffer import CircularBuffer, BufferStatus
 from ..alac import ALACEncoder, encrypt_aes
-from ..config import SAMPLING_RATE, FRAMES_PER_PACKET, STREAM_LATENCY, SYNC_PERIOD, REF_SEQ
-from ..util import milliseconds_since_1970, low32, EventHook
+from ..config import SAMPLING_RATE, FRAMES_PER_PACKET, STREAM_LATENCY, SYNC_PERIOD
+from ..util import milliseconds_since_1970, low32, EventHook, random_int
 
 
 class AudioSync(object):
@@ -22,21 +22,28 @@ class AudioSync(object):
 
         self.on_need_sync = EventHook()
 
+        # current audio file
+        self.audio_file = None
+
         self.devices = set()
 
         # last send sequence
-        self.last_seq = REF_SEQ
-        self.rtp_time_ref = milliseconds_since_1970()
+        self.ref_seq = randint(0, 0xffff)
+        self.last_seq = self.ref_seq
+
+        # reference rtp time
+        self.rtp_time_ref = None
 
         # audio sync timer
         self.timer = None
 
-        # buffer for audio data
-        self.buffer = None
+        # device magic for audio packet
+        self._device_magic = random_int(9)
+
         self.is_streaming = False
-        # This flag prevents the playback if the buffer is not full, the stream is paused and a callback is
-        # send that the buffer status changed.
-        self.is_paused = False
+
+        # is the next package to send the first one (Note: resume leads to a first package as well)
+        self._is_first_package = True
 
         # encoder instance for alac encoder
         self._encoder = ALACEncoder(frames_per_packet=FRAMES_PER_PACKET)
@@ -45,19 +52,17 @@ class AudioSync(object):
         """
         Send a packet over udp
         :param seq_num: sequence number
+        :param use_backlog: look for the packet in the back_log (cache of all packets send in the last two seconds)
         """
-        if not self.is_streaming:
+        if not self.is_streaming or not self.audio_file:
             return
 
-        rel_seq = (seq_num - REF_SEQ)
-        if rel_seq % SYNC_PERIOD == 0:
-            self.on_need_sync.fire(seq_num)
-
-        if self.is_paused:
-            return
+        rel_seq_num = seq_num - self.ref_seq
+        if rel_seq_num % SYNC_PERIOD == 0:
+            self.on_need_sync.fire(seq_num, self._is_first_package)
 
         # encode pcm raw data to alac data
-        pcm_data = self.buffer.next_packet()
+        pcm_data = self.audio_file.get_frame(rel_seq_num)
         alac_data = self._encoder.encode_alac(pcm_data, sample_rate=SAMPLING_RATE)
 
         # packet timestamp
@@ -70,29 +75,51 @@ class AudioSync(object):
                 alac_data = encrypt_aes(alac_data)
 
             # create the audio packet and instruct each device to send it over its udp connection
-            packet = AudioPacket(seq_num, alac_data, timestamp, is_first=(rel_seq == 0))
+            packet = AudioPacket(seq_num, alac_data, timestamp, self._device_magic, is_first=self._is_first_package)
             device.send_audio_packet(packet)
 
+        # toggle the the first package flag
+        if self._is_first_package:
+            self._is_first_package = False
+
     # region start/stop streaming
-    def start_streaming(self, audio_file):
+    def start_streaming(self, file_path):
         """
-        Create the buffer and fill it with 100 packets.
-        :param audio_file: path to audio file
+        Start streaming the music file at the given path.
+        :param file_path: path to the audio file
         """
-        # create buffer for pcm data
-        pcm = audiotools.open(audio_file).to_pcm()
-        #import audioread
-        #pcm = audioread.audio_open(audio_file)
-        self.buffer = CircularBuffer(pcm, 20)
-        self.buffer.on_status_changed += self.status_changed
-        self.buffer.start_buffering()
+        if self.is_streaming:
+            return False
+
+        # create an audio file to read the pcm data
+        self.audio_file = AudioFile(file_path)
+
+        # store the reference rtp_time_ref
+        self.rtp_time_ref = milliseconds_since_1970()
+
+        # start the streaming process
+        self.is_streaming = True
+
+        # start sending audio in a background thread
+        self.timer = Timer(0, self.sync_audio)
+        self.timer.start()
+        return True
 
     def pause_streaming(self):
         """
         Pause the current stream.
         """
-        self.is_paused = True
-        #self.is_streaming = False
+        if not self.is_streaming:
+            return False
+
+        self.is_streaming = False
+
+        # cancel the next timer
+        if self.timer:
+            self.timer.cancel()
+            self.timer = None
+
+        return True
 
     def resume_streaming(self):
         """
@@ -100,33 +127,30 @@ class AudioSync(object):
         Start sending audio as if it was a new audio stream. This means the transmission will start with a SyncPacket
         marked as a "first" packet, and it will be followed by an Audio packet with the "first" marker too.
         """
-        self.is_paused = False
-        #self.is_streaming = True
-        #
-        self.last_seq = REF_SEQ
+        if self.is_streaming:
+            return False
 
-        # restart the streaming if the status is already BufferStatus.FULL, otherwise the streaming will resume
-        # automatically
-        #if self.buffer.status == BufferStatus.FULL:
-        #    self.sync_audio()
+        self.is_streaming = True
 
-    def close(self):
-        """
-        Cleanup the buffer.
-        """
-        self.is_streaming = False
+        # because the device buffer is lost we need to seek back two seconds
+        packets_per_seconds = SAMPLING_RATE//FRAMES_PER_PACKET
+        latency = 2*packets_per_seconds
+        self.last_seq = max(self.last_seq-latency, self.ref_seq)
 
-        if self.buffer:
-            self.buffer.stop_buffering()
-            self.buffer.on_status_changed -= self.status_changed
+        # resume where we left off => add the time delta between pause and resume to the reference time
+        # substract the latency SAMPLING_RATE*2
+        elapsed = milliseconds_since_1970() - self.rtp_time_ref
+        current_seq = self.ref_seq + int(elapsed * SAMPLING_RATE / (FRAMES_PER_PACKET * 1000))
+        time_delta = int((current_seq-self.last_seq)*(FRAMES_PER_PACKET * 1000)/SAMPLING_RATE)
+        self.rtp_time_ref += time_delta
 
-        if self.timer:
-            self.timer.cancel()
-            self.timer = None
+        # start the stream
+        self.timer = Timer(0, self.sync_audio)
+        self.timer.start()
 
     def sync_audio(self):
         """
-        :return:
+        Callback to repeatably send audio.
         """
         if not self.is_streaming:
             return
@@ -137,39 +161,19 @@ class AudioSync(object):
         elapsed = milliseconds_since_1970() - self.rtp_time_ref
         # current_seq is the number of the packet we should be sending now. We have some packets to catch-up since
         # sync_audio is not always running.
-        current_seq = REF_SEQ+int(elapsed * SAMPLING_RATE / (FRAMES_PER_PACKET * 1000))
+        current_seq = self.ref_seq+int(elapsed * SAMPLING_RATE / (FRAMES_PER_PACKET * 1000))
+        #print("before: ", self.last_seq)
 
         for i in range(self.last_seq, current_seq):
+            # interrupt streaming if the stream was paused or stopped
+            if not self.is_streaming:
+                return
+
             self.send_packet(i)
 
         self.last_seq = current_seq
+        #print("after: ", self.last_seq)
 
         # schedule next sync event
         self.timer = Timer(STREAM_LATENCY, self.sync_audio)
         self.timer.start()
-
-    # region Buffer callbacks
-    def status_changed(self, status):
-        """
-        Called when the buffer status changed.
-        :param status: new buffer status
-        """
-        if self.is_paused:
-            return
-
-        # preload finished => start playback
-        if status == BufferStatus.FULL and not self.is_streaming:
-            self.is_streaming = True
-            # start playback in a background thread, because otherwise put and get will block at the same time
-            # as they are both called from the CircularBuffer-Thread, because the dispatch method does not
-            # dispatch to the main thread
-            self.rtp_time_ref = milliseconds_since_1970()
-
-            # send first audio sync to start playback
-            self.timer = Timer(0, self.sync_audio)
-            self.timer.start()
-
-        # stream ended => remove the buffer listener
-        if status == BufferStatus.END:
-            self.close()
-    # endregion

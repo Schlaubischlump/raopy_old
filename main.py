@@ -12,9 +12,9 @@ from raopy.exceptions import DeviceAuthenticationRequiresPasswordError, DeviceAu
 # the basic config needs to be enabled for the lowest required loglevel
 #logging.basicConfig(level=logging.DEBUG)
 
-set_logs_enabled(LOG.RTSP | LOG.RECEIVER | LOG.CONTROL)# | LOG.CONTROL)
+set_logs_enabled(LOG.RTSP | LOG.RECEIVER)# | LOG.CONTROL)
 set_loglevel(LOG.ALL, logging.DEBUG)
-#set_loglevel(LOG.RECEIVER, logging.INFO)
+set_loglevel(LOG.RECEIVER, logging.INFO)
 
 
 SHAIRPORT_DEVICE = "MacBookPro._raop._tcp.local."
@@ -57,11 +57,18 @@ def add_receiver(device, name, info):
             # try to connect with new credentials
             airtunes.connect_device(device, credentials=(auth_identifier, auth_secret))
 
-        airtunes.play("sample.m4a")
-        sleep(14)
+        airtunes.play("sample.mp3")
+        sleep(4)
         print("Pause it now.")
         airtunes.pause()
+        sleep(2)
+        print("Resume it now.")
+        airtunes.resume()
+
         sleep(10)
+        print("Pause it now.")
+        airtunes.pause()
+        sleep(2)
         print("Resume it now.")
         airtunes.resume()
 
