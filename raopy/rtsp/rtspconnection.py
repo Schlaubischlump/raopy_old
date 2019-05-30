@@ -26,21 +26,30 @@ class RTSPConnection(object):
         # store all responses in a queue
         self._response_queue = Queue()
 
+        self._socket = None
         self.open()
 
     def open(self):
         """
         # Create a TCP connection to the host and listen for responses
         """
+        if self._socket:
+            return False
+
         self._socket = socket.create_connection(self.address)
         self.listen_for_responses()
+        return True
 
     def close(self):
         """
         Close the socket connection.
         """
+        if not self._socket:
+            return False
+
         self._socket.close()
         self._socket = None
+        return True
 
     def send_request(self, req):
         """

@@ -16,7 +16,7 @@ class STATUS(Enum):
 class AirTunes(object):
 
     def __init__(self):
-        self._devices = set()
+        self._receivers = set()
         self._audio_sync = AudioSync()
         self._udp_servers = UDPServer()
 
@@ -24,20 +24,21 @@ class AirTunes(object):
         # these ports are obviously the same for all clients
         self._udp_ports = self._udp_servers.control.port, self._udp_servers.timing.port
 
-        # listen for sync callbacks
-        self._audio_sync.on_need_sync += self.need_sync
-
         # current playback status
         self.status = STATUS.STOPPED
 
+        # listen for sync callbacks
+        self._audio_sync.on_need_sync += self.need_sync
+        self._audio_sync.on_stream_ended += self.stop
+
     # region audio sync callbacks
-    def need_sync(self, last_seq, is_first):
+    def need_sync(self, next_seq, is_first):
         """
         Called whenever control packets to all clients should be send.
-        :param last_seq: last sequence number
+        :param next_seq: sequence number of next audio packet to send
         :param is_first: is this package the first to send after play or resume
         """
-        self._udp_servers.send_control_sync(last_seq, is_first)
+        self._udp_servers.send_control_sync(self._receivers, next_seq, is_first)
     # endregion
 
     # region connect/disconnect
@@ -64,12 +65,10 @@ class AirTunes(object):
         :param credentials: optional credentials required for new devices
         :return: True on success, otherwise False
         """
-        if device not in self._devices:
+        if device not in self._receivers:
             # establish an rstp connection to the airplay device
-            self._udp_servers.register_host(device)
-
-            device.connect(self._udp_ports, self._audio_sync.last_seq, password, credentials)
-            self._devices.add(device)
+            device.connect(self._udp_ports, self._audio_sync.next_seq, password, credentials)
+            self._receivers.add(device)
             self._audio_sync.devices.add(device)
             return True
         return False
@@ -80,9 +79,8 @@ class AirTunes(object):
         :param device: AirTunesDevice instance
         :return: True on succes, otherwise False
         """
-        if device in self._devices:
-            self._devices.remove(device)
-            self._udp_servers.unregister_host(device)
+        if device in self._receivers:
+            self._receivers.remove(device)
             self._audio_sync.devices.remove(device)
 
             # close connection to airplay device
@@ -115,8 +113,8 @@ class AirTunes(object):
             return False
 
         # send a flush request for each receiver over rtsp
-        for receiver in self._devices:
-            receiver.flush(self._audio_sync.last_seq)
+        for receiver in self._receivers:
+            receiver.flush(self._audio_sync.ref_seq)
 
         # stop sending audio and control packets
         self._audio_sync.pause_streaming()
@@ -132,16 +130,20 @@ class AirTunes(object):
             return False
 
         # Fix the current connection if a teardown was sent in the meantime
-        for receiver in self._devices:
+        for receiver in self._receivers:
             # We have to start over with the first seq number
-            receiver.repair_connection(self._audio_sync.last_seq)
+            receiver.repair_connection(self._audio_sync.next_seq)
 
         self._audio_sync.resume_streaming()
         self.status = STATUS.PLAYING
         return True
 
     def stop(self):
-        pass
+        # Todo: send teardown and stuff
+        if not self.status != STATUS.STOPPED:
+            return False
+
+        self._audio_sync.stop_streaming()
 
     def set_artwork(self, artwork):
         pass

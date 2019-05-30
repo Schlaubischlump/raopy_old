@@ -65,12 +65,13 @@ def add_receiver(device, name, info):
         print("Resume it now.")
         airtunes.resume()
 
-        sleep(10)
+        sleep(5)
         print("Pause it now.")
         airtunes.pause()
-        sleep(2)
+        sleep(6)
         print("Resume it now.")
         airtunes.resume()
+
 
 def remove_receiver(device, name, info):
     airtunes.disconnect_device(device)

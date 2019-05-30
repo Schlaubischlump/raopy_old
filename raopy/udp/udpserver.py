@@ -9,8 +9,9 @@ from collections import namedtuple
 from select import select
 from threading import Thread
 
+from ..rtp import rtp_timestamp_for_seq
 from ..util import NtpTime, low32
-from ..config import FRAMES_PER_PACKET, SAMPLING_RATE
+from ..config import FRAMES_PER_PACKET, RAOP_FRAME_LATENCY
 from .timingpacket import TIMING_PACKET_SIZE, TimingPacket
 from .controlpacket import SyncPacket, ResendPacket
 
@@ -48,8 +49,6 @@ class UDPServer(object):
     UDP Server to allow sending timing information to the host.
     """
     def __init__(self):
-        self._hosts = {}
-
         # set a NTP reference time
         NtpTime.initialize()
 
@@ -63,46 +62,23 @@ class UDPServer(object):
         # start listening and responding to incoming packets
         self.start_responding()
 
-    def register_host(self, device):
+    def send_control_sync(self, receivers, seq, is_first):
         """
-        Register an new raop receiver which should be listened/responded to.
-        :param device: airtunes receiver instance
-        :return: True on success, otherwise False
-        """
-        if device.ip not in self._hosts:
-            self._hosts[device.ip] = device
-            return True
-        return False
-
-    def unregister_host(self, device):
-        """
-        Unregister an raop receiver and stop listening/responding to it.
-        :param device: airtunes receiver instance
-        :return: True on success, otherwise False
-        """
-        if device.ip in self._hosts:
-            del self._hosts[device.ip]
-            return True
-        return False
-
-    def send_control_sync(self, seq, is_first):
-        """
-        Send a control packet to all registered devices.
+        Send a control packet to all registered receivers.
+        :param receivers: list with all receiver instances
         :param seq: sequence number
         :param is_first: is the package the first control package
         """
-        for device in self._hosts.values():
-            if not device.control_port:
+        for receiver in receivers:
+            if not receiver.control_port:
                 return
 
-            latency = SAMPLING_RATE*2
-            now = low32(seq*FRAMES_PER_PACKET + latency)
             sync_packet = SyncPacket.create(is_first=is_first,
-                                            now_minus_latency=now - latency,
-                                            now=now,
+                                            now_minus_latency=rtp_timestamp_for_seq(seq, include_latency=False),
+                                            now=rtp_timestamp_for_seq(seq),
                                             time_last_sync=NtpTime.get_timestamp())
 
-            dest = (device.ip, device.control_port)
+            dest = (receiver.ip, receiver.control_port)
             control_logger.debug("Send control packet tp {0}:\n\033[91m{1}\033[0m".format(dest, sync_packet))
             self.control.socket.sendto(sync_packet.to_data(), dest)
 
@@ -130,10 +106,6 @@ class UDPServer(object):
             while self._is_listening:
                 select([self.timing.socket], [], [])
                 data, addr = self.timing.socket.recvfrom(TIMING_PACKET_SIZE)
-
-                # make sure that the host is registered
-                if addr[0] not in self._hosts:
-                    return
 
                 # read the timing packet
                 response = TimingPacket.parse(data)

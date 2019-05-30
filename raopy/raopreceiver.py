@@ -3,7 +3,7 @@ from __future__ import print_function
 import socket
 from logging import getLogger
 
-from .config import SAMPLING_RATE, FRAMES_PER_PACKET
+from .exceptions import RTSPClientAlreadyConnected
 from .rtsp import RTSPStatus, RTSPClient, RAOPCrypto, RAOPCodec
 from .util import binary_ip_to_string
 
@@ -23,24 +23,22 @@ class RAOPReceiver(object):
         self.port = port  # raop service port
         self.hostname = hostname
 
+        # create the audio socket if connect is called
+        self._audio_socket = None
+
         # create a RTSP client to send the data to the host
         self._rtsp_client = RTSPClient(self.ip, self.port, crypto=crypto, codecs=codecs)
 
-        # configure rtsp client and audio sender
-        self._rtsp_client.volume = 50
+        # True if the RTSP connection is established, False otherwise
+        self.is_rtsp_connected = False
 
         # listen for callback events from the RTSPClient
         self._rtsp_client.on_connection_ready += self.connection_ready
         self._rtsp_client.on_connection_closed += self.connection_closed
 
-        # save the packages of the last two seconds to allow resume
-        packets_per_second = SAMPLING_RATE // FRAMES_PER_PACKET
-
     def __str__(self):
-        return "<{0}>: name={1}, address={2}:{3}, server={4}".format(self.__class__.__name__,
-                                                                                     self.name,
-                                                                                     self.ip, self.port,
-                                                                                     self.hostname)
+        return "<{0}>: name={1}, address={2}:{3}, server={4}".format(self.__class__.__name__, self.name, self.ip,
+                                                                     self.port, self.hostname)
 
     def __repr__(self):
         return str(self)
@@ -86,6 +84,14 @@ class RAOPReceiver(object):
         """
         return self._rtsp_client.codecs
 
+    #@property
+    #def latency(self):
+    #    """
+    #    AirPlay devices seem to send everything with a latency of 11025 + the latency
+    #    set in the sync packet.
+    #    """
+    #    return self._rtsp_client.audio_latency + RAOP_LATENCY_MIN
+
     def connection_closed(self, reason):
         """
         Called when RTSP connection shut down.
@@ -97,7 +103,7 @@ class RAOPReceiver(object):
         """
         Called when the RTSP connection is established.
         """
-        pass
+        self.is_rtsp_connected = True
     # endregion
 
     # region establish/destroy a connection
@@ -114,23 +120,29 @@ class RAOPReceiver(object):
         """
         return self._rtsp_client.register_client(pin)
 
-    def connect(self, udp_ports, last_seq, password=None, credentials=None):
+    def connect(self, udp_ports, next_seq, password=None, credentials=None, volume=100):
         """
         Connect to the airplay receiver by performing an handshake
         :param udp control and timing port als tuple
-        :param last_seq: last sequence number
+        :param next_seq: last sequence number
         :param password: optional password required for the device
         :param credentials: credentials required for the device (Apple TV 4 and up only)
+        :param volume: default connection volume
         """
+        if self._audio_socket:
+            raise RTSPClientAlreadyConnected("The RTSP client for {0} is already connected.".format(str(self)))
+
         # socket required to send the audio packets to
         self._audio_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
-        self._rtsp_client.start_handshake(udp_ports, last_seq, password, credentials)
+        # connect to the rtsp client
+        self._rtsp_client.start_handshake(udp_ports, next_seq, password, credentials, volume=volume)
+        return True
 
     def repair_connection(self, last_seq):
         """
         Reopen the connection if it was closed for e.g. because of a teardown request.
         :param last_seq: last seq number
+        :return: True on success, False otherwise
         """
         if self._rtsp_client.status == RTSPStatus.CLOSED:
             # repair the rtsp connection
@@ -139,6 +151,10 @@ class RAOPReceiver(object):
             # recreat the audio socket
             if not self._audio_socket:
                 self._audio_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+            return True
+
+        return False
 
     def disconnect(self):
         """
@@ -152,11 +168,11 @@ class RAOPReceiver(object):
             self._audio_socket.close()
             self._audio_socket = None
 
-    def flush(self, last_seq):
+    def flush(self, seq):
         """
         Send a flush request.
         """
-        self._rtsp_client.flush(last_seq)
+        self._rtsp_client.flush(seq)
 
     # endregion
 
@@ -167,7 +183,7 @@ class RAOPReceiver(object):
         :param packet: audio packet instance
         """
         # make sure the handshake is finished
-        if not self.server_port:
+        if not self.server_port or not self._audio_socket:
             return
 
         self._audio_socket.sendto(packet.to_data(), (self.ip, self.server_port))

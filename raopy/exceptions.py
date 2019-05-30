@@ -106,3 +106,10 @@ class UnsupportedFileType(Exception):
     Thrown when the given file type is not supported.
     """
     pass
+
+
+class RTSPClientAlreadyConnected(Exception):
+    """
+    Thrown when a new RTSP connection should be established, but the old one is still active.
+    """
+    pass

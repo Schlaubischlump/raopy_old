@@ -24,7 +24,9 @@
 - REF_SEQ should be unique per Session, not global 
 - insert low16 and low32 where required
 - add mutex to critial sections
-- Fix music skip when resume
-- resturcture backlog ? 
-- remove bindings and use audiotools ALACDecoder instead / perform aes crypto with python
 - check seekable audiofile implementation
+- Fix resume position is off
+- Allow streaming more then one file
+- Debug stop when the end of the stream is reached
+- Use the latency of each device from the header (is this a good idea after all ? the header seems to be incorrect in some cases and it would require restructuring the code)
+- Do not allow interaction while flushing (?)

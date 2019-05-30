@@ -88,8 +88,9 @@ class AudioFile(object):
             if self._last_frame >= len(self._data):
                 return None
 
+            frame_data = self._data[self._last_frame]
             self._last_frame += 1
-            return self._data[self._last_frame]
+            return frame_data
 
     def get_frame(self, frame_number):
         """

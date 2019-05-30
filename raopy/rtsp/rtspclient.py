@@ -14,9 +14,10 @@ from .rtspconnection import RTSPConnection
 from .rtsprequest import RTSPRequest, DigestInfo
 
 from .. import __version__
+from ..rtp import rtp_timestamp_for_seq
 from ..crypto.srp import SRPAuthenticationHandler, new_credentials
-from ..util import EventHook, random_int, random_hex, get_ip_address, low32
-from ..config import FRAMES_PER_PACKET, DEFAULT_RTSP_TIMEOUT, SAMPLING_RATE, IV, RSA_AES_KEY
+from ..util import EventHook, random_int, random_hex, get_ip_address
+from ..config import DEFAULT_RTSP_TIMEOUT, IV, RSA_AES_KEY, RAOP_LATENCY_MIN
 from ..exceptions import DeviceAuthenticationPairingError, DeviceAuthenticationWrongPasswordError, \
     DeviceAuthenticationError, DeviceAuthenticationWrongPinCodeError, NotEnoughBandwidthError, BadResponseError, \
     DeviceAuthenticationRequiresPinCodeError, DeviceAuthenticationRequiresPasswordError, UnsupportedCryptoError, \
@@ -141,7 +142,7 @@ class RTSPClient(object):
         self.timing_port = 0
 
         # audio latency received by the handshake
-        self.audio_latency = 0
+        self.audio_latency = RAOP_LATENCY_MIN
 
         # last used authentication information
         self._last_password = None
@@ -254,7 +255,7 @@ class RTSPClient(object):
 
         return res.code == 200
 
-    def flush(self, last_seq, digest_info=None):
+    def flush(self, next_seq, digest_info=None):
         """
         Flush the data.
         """
@@ -267,10 +268,11 @@ class RTSPClient(object):
 
             self.cseq += 1
             header = self._get_default_header()
-            rtp_sync_time = low32(last_seq * FRAMES_PER_PACKET + 2 * SAMPLING_RATE)
+            rtp_sync_time = rtp_timestamp_for_seq(next_seq)
+            print("Flush: ", rtp_sync_time)
 
             header.update({
-                "RTP-Info": "seq={0};rtptime={1}".format(last_seq, rtp_sync_time)
+                "RTP-Info": "seq={0};rtptime={1}".format(next_seq, rtp_sync_time)
             })
 
             req = RTSPRequest(self.default_uri, "FLUSH", header, digest_info=digest_info)
@@ -518,14 +520,14 @@ class RTSPClient(object):
         })
         return RTSPRequest(self.default_uri, self.status, header, digest_info=digest_info)
 
-    def get_record_request(self, last_seq, digest_info=None):
+    def get_record_request(self, next_seq, digest_info=None):
         self.cseq += 1
         header = self._get_default_header()
-        rtp_sync_time = low32(last_seq * FRAMES_PER_PACKET + 2 * SAMPLING_RATE)
+        rtp_sync_time = rtp_timestamp_for_seq(next_seq)
 
         header.update({
             "Range": "npt=0-",
-            "RTP-Info": "seq={0};rtptime={1}".format(last_seq, rtp_sync_time)
+            "RTP-Info": "seq={0};rtptime={1}".format(next_seq, rtp_sync_time)
         })
         return RTSPRequest(self.default_uri, self.status, header, digest_info=digest_info)
     # endregion
@@ -549,7 +551,7 @@ class RTSPClient(object):
 
         return DigestInfo(username=USER_STR, realm=realm, nonce=nonce, password=password)
 
-    def start_handshake(self, udp_ports, last_seq, password=None, credentials=None, volume=None):
+    def start_handshake(self, udp_ports, next_seq, password=None, credentials=None, volume=None):
         """
         Handshake with the server.
         :param last_seq: last sequence number
@@ -625,11 +627,18 @@ class RTSPClient(object):
 
         # region record
         self.status = RTSPStatus.RECORD
-        record = self.get_record_request(last_seq, self.digest_info)
+        record = self.get_record_request(next_seq, self.digest_info)
         res = self.send_and_recv(record, allowed_codes={200})
 
+        # Todo: currently not used
         if "Audio-Latency" in res.headers:
             self.audio_latency = int(res.headers["Audio-Latency"])
+            print("audio-latency: ", self.audio_latency)
+            logger.info("Received audio latency: %s", self.audio_latency)
+        else:
+            self.audio_latency = RAOP_LATENCY_MIN
+            logger.info("Assume default audio latency: %s", self.audio_latency)
+
         self.on_connection_ready.fire()
         logger.info("Connection ready:\n%s", str(self))
         #endregion
@@ -640,13 +649,13 @@ class RTSPClient(object):
             self.set_volume(volume, self.digest_info)
         # endregion
 
-    def repair_connection(self, last_seq):
+    def repair_connection(self, next_seq):
         """
         Try to reopen a socket connection after it was closed.
-        :param last_seq: last sequence number. This can be a random number.
+        :param next_seq: next audio packet sequence number. This can be a random number.
         """
         self.connection.open()
-        self.start_handshake((self.client_control_port, self.client_timing_port), last_seq,
+        self.start_handshake((self.client_control_port, self.client_timing_port), next_seq,
                              password=self._last_password, credentials=self._last_credentials)
 
     def close(self):
