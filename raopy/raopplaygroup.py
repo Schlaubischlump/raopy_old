@@ -1,5 +1,5 @@
 """
-Main AirTunes class to register devices and start playback.
+Main RAOPPlayGroup class to register receivers and start playback.
 """
 from enum import Enum
 
@@ -13,16 +13,21 @@ class STATUS(Enum):
     STOPPED = 2
 
 
-class AirTunes(object):
+class RAOPPlayGroup(object):
 
     def __init__(self):
+        # all raop receivers
         self._receivers = set()
-        self._audio_sync = AudioSync()
-        self._udp_servers = UDPServer()
+
+
+        self._udp_server = UDPServer()
+
+        # audio sync needs a reference to all devices to send the audio packets and to the udp server for sync packets
+        self._audio_sync = AudioSync(udp_server=self._udp_server, receivers=self._receivers)
 
         # upd ports for timing and control information on this server
         # these ports are obviously the same for all clients
-        self._udp_ports = self._udp_servers.control.port, self._udp_servers.timing.port
+        self._udp_ports = self._udp_server.control.port, self._udp_server.timing.port
 
         # current playback status
         self.status = STATUS.STOPPED
@@ -31,15 +36,6 @@ class AirTunes(object):
         self._audio_sync.on_need_sync += self.need_sync
         self._audio_sync.on_stream_ended += self.stop
 
-    # region audio sync callbacks
-    def need_sync(self, next_seq, is_first):
-        """
-        Called whenever control packets to all clients should be send.
-        :param next_seq: sequence number of next audio packet to send
-        :param is_first: is this package the first to send after play or resume
-        """
-        self._udp_servers.send_control_sync(self._receivers, next_seq, is_first)
-    # endregion
 
     # region connect/disconnect
     def request_pincode_for_device(self, device):
@@ -60,7 +56,7 @@ class AirTunes(object):
     def connect_device(self, device, password=None, credentials=None):
         """
         Add an airplay device to the current playback session.
-        :param device: AirTunesDevice instance
+        :param device: RaopReceiver instance
         :param password: optional password required for some devices
         :param credentials: optional credentials required for new devices
         :return: True on success, otherwise False
@@ -76,7 +72,7 @@ class AirTunes(object):
     def disconnect_device(self, device):
         """
         Disconnect a device from the current playback session.
-        :param device: AirTunesDevice instance
+        :param device: RaopReceiver instance
         :return: True on succes, otherwise False
         """
         if device in self._receivers:
@@ -112,12 +108,13 @@ class AirTunes(object):
         if not self.status == STATUS.PLAYING:
             return False
 
-        # send a flush request for each receiver over rtsp
-        for receiver in self._receivers:
-            receiver.flush(self._audio_sync.ref_seq)
-
         # stop sending audio and control packets
         self._audio_sync.pause_streaming()
+
+        # send a flush request for each receiver over rtsp
+        for receiver in self._receivers:
+            receiver.flush(self._audio_sync.current_seq_number)
+
         self.status = STATUS.PAUSED
         return True
 
@@ -132,18 +129,26 @@ class AirTunes(object):
         # Fix the current connection if a teardown was sent in the meantime
         for receiver in self._receivers:
             # We have to start over with the first seq number
-            receiver.repair_connection(self._audio_sync.next_seq)
+            receiver.repair_connection(self._audio_sync.current_seq_number)
 
         self._audio_sync.resume_streaming()
         self.status = STATUS.PLAYING
         return True
 
     def stop(self):
-        # Todo: send teardown and stuff
-        if not self.status != STATUS.STOPPED:
+        """
+        Stop the current playback on all devices.
+        :return:
+        """
+        if self.status == STATUS.STOPPED:
             return False
 
+        # stop streaming
         self._audio_sync.stop_streaming()
+
+        # disconnect the rtsp connection
+        for receiver in self._receivers:
+            receiver.disconnect()
 
     def set_artwork(self, artwork):
         pass
