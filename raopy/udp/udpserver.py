@@ -68,6 +68,9 @@ class UDPServer(object):
         :param seq: sequence number
         :param is_first: is the package the first control package
         """
+        if not self.control.socket:
+            return
+
         for receiver in receivers:
             if not receiver.control_port:
                 return
@@ -82,6 +85,10 @@ class UDPServer(object):
             self.control.socket.sendto(sync_packet.to_data(), dest)
 
     def close(self):
+        """
+        Stop listening and close all sockets.
+        Note: you can not reopen the server because the ports might not be free anymore.
+        """
         self._is_listening = False
 
         if self.timing:
@@ -93,6 +100,9 @@ class UDPServer(object):
             self.control = None
 
     def start_responding(self):
+        """
+        Start a background thread to respond to timing packets and another one to respond to control packets.
+        """
         if self._is_listening:
             return
 
@@ -103,40 +113,48 @@ class UDPServer(object):
             Listen and responds to the timing data.
             """
             while self._is_listening:
-                select([self.timing.socket], [], [])
-                data, addr = self.timing.socket.recvfrom(TIMING_PACKET_SIZE)
+                try:
+                    select([self.timing.socket], [], [])
+                    data, addr = self.timing.socket.recvfrom(TIMING_PACKET_SIZE)
 
-                # read the timing packet
-                response = TimingPacket.parse(data)
+                    # read the timing packet
+                    response = TimingPacket.parse(data)
 
-                if not response:
-                    timing_logger.warning("Skipping malformed timing packet from {0}.".format(addr))
-                    continue
-                timing_logger.debug("Received timing packet from {0}:\n\033[94m{1}\033[0m".format(addr, response))
+                    if not response:
+                        timing_logger.warning("Skipping malformed timing packet from {0}.".format(addr))
+                        continue
+                    timing_logger.debug("Received timing packet from {0}:\n\033[94m{1}\033[0m".format(addr, response))
 
-                # send responds to timing packets
-                request = TimingPacket.create(reference_time=response.send_time, received_time=NtpTime.get_timestamp(),
-                                              send_time=NtpTime.get_timestamp())
-                timing_logger.debug("Send timing packet to {0}:\n\033[91m{1}\033[0m".format(addr, request))
-                self.timing.socket.sendto(request.to_data(), addr)
+                    # send responds to timing packets
+                    request = TimingPacket.create(reference_time=response.send_time, received_time=NtpTime.get_timestamp(),
+                                                  send_time=NtpTime.get_timestamp())
+                    timing_logger.debug("Send timing packet to {0}:\n\033[91m{1}\033[0m".format(addr, request))
+                    self.timing.socket.sendto(request.to_data(), addr)
+                except (OSError, ValueError):
+                    # socket closed
+                    break
 
         def listen_control():
             """
             Listen and respond to the control data.
             """
             while self._is_listening:
-                select([self.control.socket], [], [])
-                data, addr = self.control.socket.recvfrom(1024)
-                response = ResendPacket.parse(data)
-                if not response:
-                    control_logger.warning("Skipping malformed control packet from {0}.".format(addr))
-                control_logger.debug("Received control packet from {0}:\n\033[94m{1}\033[0m".format(addr, response))
+                try:
+                    select([self.control.socket], [], [])
+                    data, addr = self.control.socket.recvfrom(1024)
+                    response = ResendPacket.parse(data)
+                    if not response:
+                        control_logger.warning("Skipping malformed control packet from {0}.".format(addr))
+                    control_logger.debug("Received control packet from {0}:\n\033[94m{1}\033[0m".format(addr, response))
+                except (OSError, ValueError):
+                    # socket closed
+                    break
 
         # Start a background thread,
-        t = Thread(target=listen_timing)
+        t = Thread(target=listen_timing, name="raopy-timing_listener-thread")
         t.daemon = True
         t.start()
 
-        t = Thread(target=listen_control)
+        t = Thread(target=listen_control, name="raopy-control_listener-thread")
         t.daemon = True
         t.start()

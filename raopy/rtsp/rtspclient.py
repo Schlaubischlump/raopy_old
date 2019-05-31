@@ -172,6 +172,7 @@ class RTSPClient(object):
         """
         if not self._timer:
             self._timer = Timer(self.timeout, lambda: self.cleanup(RTSPReason.TIMEOUT))
+            self._timer.name = "raopy-rtsp_timeout-thread"
             self._timer.start()
 
     def reset_timeout(self):
@@ -191,6 +192,10 @@ class RTSPClient(object):
         :param allowed_codes: whitelist for allow codes
         :return: response instance
         """
+        # reopen the connection if required (TEARDOWN was send or the connection wasn't opened yet)
+        if not self.connection.is_open():
+            self.connection.open()
+
         logger.debug("Send request:\n\033[91m" + str(request) + "\033[0m")
 
         # start a timer for each send / receive. If the response takes to long, we consider the server gone
@@ -248,19 +253,30 @@ class RTSPClient(object):
 
         self.status = RTSPStatus.CLOSED
         self.on_connection_closed.fire(reason.name)
-        logger.info("Connection closed with reason: %s\n%s", reason.name, str(self))
 
         # close the socket
         self.connection.close()
+
+        logger.info("Connection closed with reason: %s\n%s", reason.name, str(self))
     # endregion
 
     # region send control commands
     def teardown(self, digest_info=None):
-        header = self._get_default_header()
-        req = RTSPRequest(self.default_uri, "TEARDOWN", header, digest_info=digest_info)
-        res = self.send_and_recv(req)
+        """
+        Teardown the connection.
+        """
+        if self.status == RTSPStatus.PLAYING:
+            if not digest_info:
+                digest_info = self.digest_info
 
-        return res.code == 200
+            self.status = RTSPStatus.TEARDOWN
+
+            header = self._get_default_header()
+            req = RTSPRequest(self.default_uri, "TEARDOWN", header, digest_info=digest_info)
+            res = self.send_and_recv(req)
+
+            return res.code == 200
+        return False
 
     def flush(self, next_seq, digest_info=None):
         """
@@ -545,7 +561,7 @@ class RTSPClient(object):
         return RTSPRequest(self.default_uri, self.status, header, digest_info=digest_info)
     # endregion
 
-    # region handshake
+    # region handshake / repair / close
     def get_digest_info(self, headers, password):
         """
         Read the provider OPTIONS headers and extract the digest info.
@@ -666,13 +682,10 @@ class RTSPClient(object):
         Try to reopen a socket connection after it was closed.
         :param next_seq: next audio packet sequence number. This can be a random number.
         """
-        self.connection.open()
+        # send a complete handshake request
         self.start_handshake((self.client_control_port, self.client_timing_port), next_seq,
                              password=self._last_password, credentials=self._last_credentials)
 
     def close(self):
-        if self.status == RTSPStatus.CLOSED:
-            return
-
         self.cleanup(RTSPReason.NORMAL)
     # endregion

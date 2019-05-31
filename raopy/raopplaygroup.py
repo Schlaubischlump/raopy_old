@@ -7,6 +7,7 @@ from logging import getLogger
 
 from .util import EventHook
 from .udp import UDPServer
+from .exceptions import PlayGroupClosedError
 from .audio import AudioSync, ms_to_seq_num, seq_num_to_ms
 
 
@@ -17,6 +18,21 @@ class STATUS(Enum):
     PLAYING = 0
     PAUSED = 1
     STOPPED = 2
+    CLOSED = 3
+
+
+def is_alive(func):
+    """
+    Decorator function which grantees that the RAOPPlayGroup is still alive, meaning the connection is not closed.
+    :param func:
+    :param throw_exception:
+    :return:
+    """
+    def func_wrapper(self, *args):
+        if self.status == STATUS.CLOSED:
+            raise PlayGroupClosedError("{0} is already closed. Create a new group.".format(self))
+        return func(self, *args)
+    return func_wrapper
 
 
 class RAOPPlayGroup(object):
@@ -35,10 +51,7 @@ class RAOPPlayGroup(object):
         """
         :param name: name of this playgroup used for debugging
         """
-        if not name:
-            self.name = str(id(self))
-
-        # logger instance
+        self.name = name or str(id(self))
 
         # all raop receivers
         self._receivers = set()
@@ -81,7 +94,8 @@ class RAOPPlayGroup(object):
         """
         group_logger.info("%s received event: %s at sequence: %s", str(self), event_name, str(seq_num))
 
-    # region connect/disconnect
+    # region connect / disconnect
+    @is_alive
     def request_pincode_for_device(self, device):
         """
         Show a pin code dialog on the Apple TV for the given device
@@ -89,6 +103,7 @@ class RAOPPlayGroup(object):
         """
         device.request_pincode()
 
+    @is_alive
     def request_login_credentials_for_device_(self, device, pin):
         """
         Register a device on the new Apple TVs.
@@ -97,6 +112,7 @@ class RAOPPlayGroup(object):
         """
         return device.register(pin)
 
+    @is_alive
     def add_receiver(self, recv, password=None, credentials=None):
         """
         Add an airplay device to the current playback session.
@@ -106,12 +122,16 @@ class RAOPPlayGroup(object):
         :return: True on success, otherwise False
         """
         if recv not in self._receivers:
-            self._receivers.add(recv)
             # if we are already playing the device should automatically start with the playback
+            # Todo: maybe it would be better to just send an OPTION request twice to check if the device is
+            #  password protected or needs credentials instead of a handshake
             recv.connect(self._udp_ports, self._audio_sync.next_seq, password, credentials)
+            self._receivers.add(recv)
+
             return True
         return False
 
+    @is_alive
     def remove_receiver(self, recv):
         """
         Disconnect a device from the current playback session.
@@ -127,7 +147,8 @@ class RAOPPlayGroup(object):
 
     # endregion
 
-    # region metadata / control
+    # region control playback
+    @is_alive
     def play_resume(self, music_file=None):
         """
         Start or resume the playback.
@@ -190,6 +211,7 @@ class RAOPPlayGroup(object):
 
         return self.play_resume()
 
+    @is_alive
     def pause(self):
         """
         Pause the current playback.
@@ -215,6 +237,7 @@ class RAOPPlayGroup(object):
 
         return True
 
+    @is_alive
     def stop(self):
         """
         Stop the current playback on all devices.
@@ -235,6 +258,22 @@ class RAOPPlayGroup(object):
         cur = self._audio_sync.current_seq_number + self._audio_sync.sequence_latency - 1
         self.on_stop.fire(seq_num_to_ms(cur))
 
+    @is_alive
+    def close(self):
+        """
+        Close the connection. The playgroup is useless after closing it.
+        """
+        if self.status != STATUS.STOPPED:
+            self.stop()
+
+        # close the udp sockets
+        self._udp_server.close()
+
+        self.status = STATUS.CLOSED
+    # endregion
+
+    # region metadata
+    @is_alive
     def set_progress(self, cur_time):
         """
         :param cur_time: time in milliseconds to which we should skip
@@ -266,12 +305,15 @@ class RAOPPlayGroup(object):
 
         return prg_res
 
+    @is_alive
     def set_artwork(self, artwork):
         pass
 
+    @is_alive
     def set_track_info(self, track_info):
         pass
 
+    @is_alive
     def set_volume(self, volume):
         pass
     # endregion

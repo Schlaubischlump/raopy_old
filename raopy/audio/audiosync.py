@@ -16,6 +16,9 @@ from ..util import milliseconds_since_1970, EventHook, random_int
 from .audiofile import AudioFile
 
 
+SYNC_AUDIO_THREAD_NAME = "raopy-sync_audio-thread"
+
+
 def seq_num_to_ms(seq_num):
     """
     Convert a sequence number to milliseconds.
@@ -141,6 +144,7 @@ class AudioSync(object):
             # inform all listener
             self.on_need_sync.fire(seq_num)
             # send the control sync
+            print("receivers: ", self.receivers)
             self.udp_server.send_control_sync(self.receivers, seq_num, first_packet)
 
         # calculate a relative sequence number between 0 and #(Frames in audio file)
@@ -199,6 +203,7 @@ class AudioSync(object):
 
         # start sending audio in a background thread
         self.timer = Timer(0, self.sync_audio)
+        self.timer.name = SYNC_AUDIO_THREAD_NAME
         self.timer.start()
 
         return True
@@ -257,6 +262,10 @@ class AudioSync(object):
 
         self.audio_file = None
 
+        # reset the playback progress and ref_seq
+        self.next_seq = self.start_seq
+        self.ref_seq = self.start_seq
+
         return True
 
     def set_progress(self, new_seq):
@@ -297,4 +306,5 @@ class AudioSync(object):
 
         # schedule next sync event
         self.timer = Timer(STREAM_LATENCY, self.sync_audio)
+        self.timer.name = SYNC_AUDIO_THREAD_NAME
         self.timer.start()

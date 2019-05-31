@@ -27,7 +27,12 @@ class RTSPConnection(object):
         self._response_queue = Queue()
 
         self._socket = None
-        self.open()
+
+    def is_open(self):
+        """
+        :return: True if the connection is open, False otherwise.
+        """
+        return self._socket is not None
 
     def open(self):
         """
@@ -121,6 +126,7 @@ class RTSPConnection(object):
                     self.close()
                     break
 
-        t = Thread(target=listen)
+        addr_str = ":".join(map(str, self.address))
+        t = Thread(target=listen, name="raopy-rtsp_listener_{0}-thread".format(addr_str))
         t.daemon = True
         t.start()

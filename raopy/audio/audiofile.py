@@ -60,11 +60,9 @@ class AudioFile(object):
 
         frame_list = reader.read(FRAMES_PER_PACKET)
         # Todo: debug to shorten the music file
-        i = 0
-        while frame_list.frames != 0:# and i < 1025:
+        while frame_list.frames != 0:
             data.append(frame_list.to_bytes(False, True))
             frame_list = reader.read(FRAMES_PER_PACKET)
-            i += 1
 
         return data
 

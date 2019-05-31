@@ -62,12 +62,12 @@ def add_receiver(device, name, info):
 
         sleep(4)
         print("Pause it now.")
-        group.stop()
-        #group.pause()
-        #group.set_progress(90000)
-        #sleep(2)
-        #print("Resume it now.")
-        #group.resume()
+        #group.stop()
+        group.pause()
+        group.set_progress(90000)
+        sleep(10)
+        print("Resume it now.")
+        group.resume()
 
         #sleep(14)
         #print("Pause it now.")
@@ -87,8 +87,10 @@ listener.on_disconnect += remove_receiver
 listener.start_listening()
 
 # listen for new devices for 5 seconds
-sleep(5)
+sleep(65)
 
 # play until the track is finished
 while group.status != STATUS.STOPPED:
     sleep(1)
+
+group.close()

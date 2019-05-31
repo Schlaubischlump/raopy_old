@@ -113,3 +113,10 @@ class RTSPClientAlreadyConnected(Exception):
     Thrown when a new RTSP connection should be established, but the old one is still active.
     """
     pass
+
+
+class PlayGroupClosedError(Exception):
+    """
+    Called when an opartion should be performed on an already closed play group.
+    """
+    pass
