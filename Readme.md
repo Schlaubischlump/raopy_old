@@ -2,31 +2,32 @@
 
 ## Todo
 - Cleanup the code! 
-- ~~Fix Audio playback not working~~
-- Feature: Flush, Teardown, Artwork, Trackinfo support
-- PCM stream support (look at RAOP-Player for how to send a raw unencoded pcm stream) 
-- Fix connection interrupted, because receiver went offline 
-- Allow play, pause, stop, volume of all and single devices
-- Allow remote control with http server
-- ~~Fix encrypt alac only if apple challenge is requested / 401 is not reliable to detect a password (use the information from zeroconf ?)~~
-- Fix respond to control data	
-- automatically extract metadata with audiotools and send it
-- ~~Add enums for encryption formats etc.~~
-- ~~add support for encryption without password protection~~
-- Fix throw error if no device is connected and you try to stream audio or something like this (this includes the connection is lost)
-- ~~Fix encryption~~
-- user zeroconf information for encryption type and codecs (authentication and password as well ?)
-- include 2 seconds latency
-- Fix setup.py requirements
-- - Fix ATV 4 not sending the timing_port (we don't actually need it, but it would be nice to have) (is this possible ?)
-- Fix replace hardcoded RSA-Key by a dynamic one (?)
-- replace the status variable with locks (?)
-- REF_SEQ should be unique per Session, not global 
-- insert low16 and low32 where required
-- add mutex to critial sections
-- check seekable audiofile implementation
-- Fix resume position is off
+- Fix: connection interrupted, because receiver went offline 
+- Fix: stop function (including when the end of the stream is reached)
+- Fix respond to control data	(lost packets)
+- Fix: setup.py requirements
+- Fix: seekable audiofile implementation (there is a bug .frames can't be written from python)
+- Fix: throw error if no device is connected and you try to stream audio or something like this (this includes the connection is lost)
+- use zeroconf information for encryption type and codecs (authentication and password as well ?)
+
+
+> Note: Sending RTSP is (is it ... ?) blocking, sending audio packets is not. This is expected behaviour 
+
+### Features:
+- Feature: send DAAP: Artwork, Trackinfo (use audiotools metadata)
+- PCM stream support (look at RAOP-Player for how to send a raw unencoded pcm stream)
+- Allow volume control of all and single devices
 - Allow streaming more then one file
-- Debug stop when the end of the stream is reached
-- Use the latency of each device from the header (is this a good idea after all ? the header seems to be incorrect in some cases and it would require restructuring the code)
-- Do not allow interaction while flushing (?)
+- Allow remote control with http server (is one server sufficient, which handles the responses for all devices ?)
+
+
+### Low priority:
+
+- Fix: do not allow interaction while flushing (Is this correctly implemented [See: Note above])
+- Fix: replace the status variable with locks (I don't know if this is required, because all rtsp request already wait until a response is in the queue)
+- Fix: insert low16 and low32 where required (are there any missing ?)
+- Fix: ATV 4 not sending the timing_port (we don't actually need it, but it would be nice to have) (is this possible ?)
+- Fix: replace hardcoded RSA-Key by a dynamic one (?)
+- Fix: use the latency of each device from the header (is this a good idea after all ? the header seems to be incorrect in some cases and it would require restructuring the code)
+
+

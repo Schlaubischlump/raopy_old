@@ -11,7 +11,6 @@ from threading import Thread
 
 from ..rtp import rtp_timestamp_for_seq
 from ..util import NtpTime, low32
-from ..config import FRAMES_PER_PACKET, RAOP_FRAME_LATENCY
 from .timingpacket import TIMING_PACKET_SIZE, TimingPacket
 from .controlpacket import SyncPacket, ResendPacket
 

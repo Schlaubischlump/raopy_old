@@ -8,7 +8,7 @@ For information about the protocol see:
 __version__ = "0.0.1"
 
 from .raopservicelistener import RAOPServiceListener
-from .airtunes import AirTunes
+from .raopplaygroup import RAOPPlayGroup, STATUS
 from .rtsp import RAOPCodec, RAOPCrypto
 
-__all__ = ["RAOPServiceListener", "AirTunes", "__version__", "RAOPCodec", "RAOPCrypto"]
+__all__ = ["RAOPServiceListener", "RAOPPlayGroup", "__version__", "RAOPCodec", "RAOPCrypto", "STATUS"]

@@ -1,5 +1,7 @@
+import os
+
 import audiotools
-from audiotools.pcm import FrameList
+from audiotools.pcm import FrameList, empty_framelist
 from audiotools.pcmconverter import BufferedPCMReader
 
 from ..config import FRAMES_PER_PACKET
@@ -12,18 +14,23 @@ class AudioFile(object):
         :param file_path: path to audio file
         """
         # check if the file format is supported
+        if not os.path.isfile(file_path):
+            raise ValueError("Could not find file {0}".format(file_path))
+
         with open(file_path, "rb") as f:
             supported = audiotools.file_type(f) in audiotools.AVAILABLE_TYPES
             if not supported:
-                raise UnsupportedFileType()
+                raise UnsupportedFileType("File format not supported.")
 
         # open the audiofile and extract the pcm stream
         self.file = audiotools.open(file_path)
         if not self.file.supports_to_pcm():
-            raise UnsupportedFileType()
+            raise UnsupportedFileType("Can not extract the pcm stream.")
 
         # is the file seekable
         self.seekable = self.file.seekable()
+        # the total number of frames in this file
+        self._num_frames = self.file.total_frames()
 
         # create a pcm reader
         pcm = self.file.to_pcm()
@@ -32,9 +39,11 @@ class AudioFile(object):
         else:
             # load the whole file into memory if seeking is not available
             self._data = self._load(pcm)
+            # Todo: just for debugging
+            self._num_frames = len(self._data)
 
         # save the last frame number
-        self._last_frame = 0
+        self._next_frame_number = 0
 
     def _load(self, pcm):
         """
@@ -50,9 +59,12 @@ class AudioFile(object):
         reader = BufferedPCMReader(pcm)
 
         frame_list = reader.read(FRAMES_PER_PACKET)
-        while frame_list.frames != 0:
+        # Todo: debug to shorten the music file
+        i = 0
+        while frame_list.frames != 0:# and i < 1025:
             data.append(frame_list.to_bytes(False, True))
             frame_list = reader.read(FRAMES_PER_PACKET)
+            i += 1
 
         return data
 
@@ -61,11 +73,10 @@ class AudioFile(object):
         Seek to a specific frame.
         :param frame_number: number of the frame.
         """
-        self._last_frame = max(frame_number, 0)
+        self._next_frame_number = min(max(frame_number, 0), self.total_frames)
+
         if self.seekable:
             self._pcm.seek(frame_number)
-        else:
-            self._last_frame = min(self._last_frame, len(self._data))
 
     def _next_frame(self):
         """
@@ -81,16 +92,23 @@ class AudioFile(object):
             if frame_list.frames == 0:
                 return None
 
-            self._last_frame += 1
+            self._next_frame_number += 1
             return frame_list.to_bytes(False, True)
         else:
             # reached the end of the frame_list
-            if self._last_frame >= len(self._data):
+            if self._next_frame_number >= len(self._data):
                 return None
 
-            frame_data = self._data[self._last_frame]
-            self._last_frame += 1
+            frame_data = self._data[self._next_frame_number]
+            self._next_frame_number += 1
             return frame_data
+
+    @property
+    def total_frames(self):
+        """
+        :return: The total number of frames in the audio file.
+        """
+        return self._num_frames
 
     def get_frame(self, frame_number):
         """
@@ -98,7 +116,11 @@ class AudioFile(object):
         :param frame_number: frame number
         :return: frame data in bytes
         """
-        if frame_number == self._last_frame:
+        # play silence if the frame number is smaller than 0
+        if frame_number < 0:
+            return b"\x00"*self.file.channels()*(self.file.bits_per_sample()//8)
+
+        if frame_number == self._next_frame_number:
             return self._next_frame()
 
         # seek to the correct frame

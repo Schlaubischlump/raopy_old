@@ -1,8 +1,5 @@
 """
 Handle the rtsp connection between the client and the receiver.
-Available Events:
-- on_connection_ready
-- on_connection_closed(reason)
 
 """
 import re
@@ -58,7 +55,7 @@ class RTSPReason(Enum):
     BUSY = 0
     UNKNOWN = 1
     TIMEOUT = 2
-    TEARDOWN = 3
+    NORMAL = 3
     #WRONG_PASSWORD = 4
     AUTHENTICATION = 5
 
@@ -87,6 +84,9 @@ class RTSPStatus(Enum):
 class RTSPClient(object):
     """
     Establish a TCP connection to the server and perform the necessary Real-Time Streaming Protocol communication steps.
+    Available Events:
+        - on_connection_ready
+        - on_connection_closed(reason)
     """
 
     def __init__(self, ip, port, codecs=RAOPCodec.ALAC, crypto=RAOPCrypto.CLEAR, user_agent=USER_AGENT):
@@ -207,7 +207,7 @@ class RTSPClient(object):
         # error handling
         if response.code == 453:
             self.cleanup(RTSPReason.BUSY)
-            raise NotEnoughBandwidthError("Not enough bandwith, try rebooting your devices.")
+            raise NotEnoughBandwidthError("Not enough bandwidth, try rebooting your devices.")
         elif response.code != 200:
             self.cleanup(RTSPReason.UNKNOWN)
             raise BadResponseError("Received response with code {0}.".format(response.code))
@@ -240,10 +240,17 @@ class RTSPClient(object):
         if self.status == RTSPStatus.CLOSED:
             return
 
+        # try to send a teardown request
+        try:
+            self.teardown()
+        except:
+            pass
+
         self.status = RTSPStatus.CLOSED
         self.on_connection_closed.fire(reason.name)
         logger.info("Connection closed with reason: %s\n%s", reason.name, str(self))
 
+        # close the socket
         self.connection.close()
     # endregion
 
@@ -269,7 +276,6 @@ class RTSPClient(object):
             self.cseq += 1
             header = self._get_default_header()
             rtp_sync_time = rtp_timestamp_for_seq(next_seq)
-            print("Flush: ", rtp_sync_time)
 
             header.update({
                 "RTP-Info": "seq={0};rtptime={1}".format(next_seq, rtp_sync_time)
@@ -279,8 +285,9 @@ class RTSPClient(object):
             res = self.send_and_recv(req)
 
             self.status = RTSPStatus.PLAYING
-
             return res.code == 200
+
+        return False
 
     def set_volume(self, vol, digest_info=None):
         """
@@ -315,20 +322,24 @@ class RTSPClient(object):
             self.status = RTSPStatus.PLAYING
             return res.code == 200
 
-    def set_progress(self, prog, digest_info=None):
+    def set_progress(self, progress, digest_info=None):
         """
         Set the current playback progress.
-        :param pro: new progress as tuple: start/current/end RTP timestamp
+        :param progress: new progress as tuple: start/current/end sequence numbers
+        :param with_latency: subtract the latency from the start sequence if True
         :param digest_info: information for password protected devices
         :return True on success, otherwise False
         """
-        assert len(prog) == 3
-
         if self.status == RTSPStatus.PLAYING:
             if not digest_info:
                 digest_info = self.digest_info
 
             self.status = RTSPStatus.SETPROGRESS
+
+            # calculate rtp timestamp for each sequence number
+            prog = [rtp_timestamp_for_seq(progress[0], include_latency=False),
+                    rtp_timestamp_for_seq(progress[1], include_latency=False),
+                    rtp_timestamp_for_seq(progress[2], include_latency=False)]
 
             self.cseq += 1
             header = self._get_default_header()
@@ -339,6 +350,8 @@ class RTSPClient(object):
             res = self.send_and_recv(req)
             self.status = RTSPStatus.PLAYING
             return res.code == 200
+
+        return False
 
     def set_track_info(self, info, digest_info=None):
         """
@@ -633,7 +646,6 @@ class RTSPClient(object):
         # Todo: currently not used
         if "Audio-Latency" in res.headers:
             self.audio_latency = int(res.headers["Audio-Latency"])
-            print("audio-latency: ", self.audio_latency)
             logger.info("Received audio latency: %s", self.audio_latency)
         else:
             self.audio_latency = RAOP_LATENCY_MIN
@@ -662,6 +674,5 @@ class RTSPClient(object):
         if self.status == RTSPStatus.CLOSED:
             return
 
-        self.teardown()
-        self.cleanup(RTSPReason.TEARDOWN)
+        self.cleanup(RTSPReason.NORMAL)
     # endregion
