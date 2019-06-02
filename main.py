@@ -64,7 +64,7 @@ def add_receiver(device, name, info):
         print("Pause it now.")
         #group.stop()
         group.pause()
-        group.set_progress(90000)
+        #group.set_progress(90000)
         sleep(10)
         print("Resume it now.")
         group.resume()

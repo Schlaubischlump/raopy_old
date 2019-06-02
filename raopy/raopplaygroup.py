@@ -56,14 +56,12 @@ class RAOPPlayGroup(object):
         # all raop receivers
         self._receivers = set()
         # the udp server for timing and control packets for all devices
-        self._udp_server = UDPServer()
+        self._udp_server = UDPServer(receivers=self._receivers)
+        self._udp_server.on_need_resend += self.on_need_resend
 
         # audio sync needs a reference to all devices to send the audio packets and to the udp server for sync packets
-        self._audio_sync = AudioSync(udp_server=self._udp_server, receivers=self._receivers)
-
-        # upd ports for timing and control information on this server
-        # these ports are obviously the same for all clients
-        self._udp_ports = self._udp_server.control.port, self._udp_server.timing.port
+        self._audio_sync = AudioSync(receivers=self._receivers)
+        self._audio_sync.on_need_sync += self.on_need_sync
 
         # current playback status
         self.status = STATUS.STOPPED
@@ -87,12 +85,30 @@ class RAOPPlayGroup(object):
     def __str__(self):
         return "{0}<{1}>".format(self.__class__.__name__, self.name)
 
-    def _log_event(self, event_name, seq_num):
+    def _log_event(self, event_name, seq_num, *args):
         """
         :param event_name: name of the received event
         :param seq_num: sequence number provided by the name
         """
         group_logger.info("%s received event: %s at sequence: %s", str(self), event_name, str(seq_num))
+
+    # region callbacks
+    def on_need_resend(self, seq, receivers):
+        """
+        Resend a missing packet to the correct receiver without triggering a control sync.
+        :param seq: sequence number
+        :param receivers: list of receivers which should receive the packet
+        """
+        self._audio_sync.send_packet(seq, receivers, is_resend=True)
+
+    def on_need_sync(self, seq, receivers):
+        """
+        Send a control packet to all receivers
+        :param seq: sequence number
+        :param receivers: list of receivers which should receive the packet
+        """
+        self._udp_server.send_control_sync(seq, receivers, is_first=self._audio_sync.ref_seq)
+    # endregion
 
     # region connect / disconnect
     @is_alive
@@ -122,10 +138,17 @@ class RAOPPlayGroup(object):
         :return: True on success, otherwise False
         """
         if recv not in self._receivers:
+            # find and open the udp ports for timing and control data as well as the audio socket
+            if len(self._receivers) == 0:
+                self._udp_server.open()
+                self._audio_sync.open()
+
+            udp_ports = self._udp_server.control.port, self._udp_server.timing.port
+
             # if we are already playing the device should automatically start with the playback
             # Todo: maybe it would be better to just send an OPTION request twice to check if the device is
             #  password protected or needs credentials instead of a handshake
-            recv.connect(self._udp_ports, self._audio_sync.next_seq, password, credentials)
+            recv.connect(udp_ports, self._audio_sync.next_seq, password, credentials)
             self._receivers.add(recv)
 
             return True
@@ -142,6 +165,12 @@ class RAOPPlayGroup(object):
             self._receivers.remove(recv)
             # close connection to airplay device
             recv.disconnect()
+
+            # close the udp port if the last device was removed
+            if len(self._receivers) == 0:
+                self._udp_server.close()
+                self._audio_sync.close()
+
             return True
         return False
 

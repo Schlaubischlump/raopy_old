@@ -2,7 +2,7 @@
 Sync audio playback information across connected devices by sending the audio packets and inform the udp server to send
 corresponding sync packets.
 """
-
+import socket
 from threading import Timer
 from random import randint
 
@@ -53,7 +53,7 @@ class AudioSync(object):
     run from the same thread, that send the audio data. Do not perform compute heavy tasks on these callback functions!
     """
 
-    def __init__(self, udp_server, receivers):
+    def __init__(self, receivers):
         super(AudioSync, self).__init__()
 
         # optional events which can be used to observe the status of the audio
@@ -67,8 +67,7 @@ class AudioSync(object):
         self.audio_file = None
 
         # save a reference (no copy!) to the devices and the udp sever
-        self.receivers = receivers
-        self.udp_server = udp_server
+        self._receivers = receivers
 
         # set a random sequence number which is always greater then the smallest latency possible => next_seq >= 0
         self.start_seq = randint(self.sequence_latency, 0xffff)
@@ -89,11 +88,43 @@ class AudioSync(object):
         # device magic for audio packet
         self._device_magic = random_int(9)
 
+        # are we currently streaming music
         self.is_streaming = False
+
+        # the main audio socket
+        self._audio_socket = None
 
         # encoder instance for alac encoder
         self._encoder = ALACEncoder(frames_per_packet=FRAMES_PER_PACKET)
 
+    # region open / close socket
+    def open(self):
+        """
+        Open an audio udp socket.
+        :return: True on success, False otherwise.
+        """
+        if not self._audio_socket:
+            self._audio_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            return True
+        return False
+
+    def close(self):
+        """
+        Close the audio socket.
+        :return: True on success, False otherwise.
+        """
+        if self.is_streaming:
+            self.stop_streaming()
+
+        if self._audio_socket:
+            self._audio_socket.close()
+            self._audio_socket = None
+            return True
+        return False
+
+    # endregion
+
+    # region properties
     @property
     def total_seq_number(self):
         """
@@ -128,24 +159,28 @@ class AudioSync(object):
         :return: latency in amount of sequences
         """
         return (RAOP_FRAME_LATENCY + RAOP_LATENCY_MIN) // FRAMES_PER_PACKET
+    # endregion
 
-    def send_packet(self, seq_num):
+    def send_packet(self, seq_num, receivers=None, is_resend=False):
         """
         Send a packet over udp
         :param seq_num: sequence number
+        :param receivers: list of receivers which should receiver this packet
+        :param is_resend: True if we are resending a packet
         """
         if not self.is_streaming or not self.audio_file:
             return False
 
         first_packet = (seq_num == self.ref_seq)
 
-        # send a control packet every SYNC_PERIOD number of audio packets
-        if (seq_num-self.ref_seq) % SYNC_PERIOD == 0:
+        # use all receivers as default
+        if receivers is None:
+            receivers = self._receivers
+
+        # send a control packet every SYNC_PERIOD number of audio packets (except on a resend)
+        if (seq_num-self.ref_seq) % SYNC_PERIOD == 0 and not is_resend:
             # inform all listener
-            self.on_need_sync.fire(seq_num)
-            # send the control sync
-            print("receivers: ", self.receivers)
-            self.udp_server.send_control_sync(self.receivers, seq_num, first_packet)
+            self.on_need_sync.fire(seq_num, set(receivers))
 
         # calculate a relative sequence number between 0 and #(Frames in audio file)
         # this can be smaller than zero, e.g. if we pause on second 1 and subtract the latency of ~2 seconds
@@ -164,14 +199,15 @@ class AudioSync(object):
         timestamp = rtp_timestamp_for_seq(seq_num)
 
         # send the audio packet to each device
-        for receiver in set(self.receivers):
+        for receiver in set(receivers):
             # use RSA encryption if the device supports it
             if receiver.encryption_type & RAOPCrypto.RSA:
                 alac_data = encrypt_aes(alac_data)
 
             # create the audio packet and instruct each device to send it over its udp connection
             packet = AudioPacket(seq_num, alac_data, timestamp, self._device_magic, is_first=first_packet)
-            receiver.send_audio_packet(packet)
+            self._audio_socket.sendto(packet.to_data(), (receiver.ip, receiver.server_port))
+
         return True
 
     # region start/stop streaming

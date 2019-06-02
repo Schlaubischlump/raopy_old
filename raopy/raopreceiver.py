@@ -1,4 +1,3 @@
-import socket
 from logging import getLogger
 
 from .rtsp import RTSPReason
@@ -21,9 +20,6 @@ class RAOPReceiver(object):
         self.ip = binary_ip_to_string(address)  # server ip address
         self.port = port  # raop service port
         self.hostname = hostname
-
-        # create the audio socket if connect is called
-        self._audio_socket = None
 
         # create a RTSP client to send the data to the host
         self._rtsp_client = RTSPClient(self.ip, self.port, crypto=crypto, codecs=codecs)
@@ -122,11 +118,9 @@ class RAOPReceiver(object):
         :param credentials: credentials required for the device (Apple TV 4 and up only)
         :param volume: default connection volume
         """
-        if self._audio_socket:
+        if self._rtsp_is_connected:
             raise RTSPClientAlreadyConnected("The RTSP client for {0} is already connected.".format(str(self)))
 
-        # socket required to send the audio packets to
-        self._audio_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         # connect to the rtsp client
         self._rtsp_client.start_handshake(udp_ports, next_seq, password, credentials, volume=volume)
         return True
@@ -141,10 +135,6 @@ class RAOPReceiver(object):
             # repair the rtsp connection
             self._rtsp_client.repair_connection(next_seq)
 
-            # recreat the audio socket
-            if not self._audio_socket:
-                self._audio_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
             return True
 
         return False
@@ -157,11 +147,6 @@ class RAOPReceiver(object):
 
         # close RTSP connection and send the teardown request
         self._rtsp_client.close()
-
-        # close audio out connection
-        if self._audio_socket:
-            self._audio_socket.close()
-            self._audio_socket = None
 
     @property
     def is_connected(self):
@@ -182,18 +167,4 @@ class RAOPReceiver(object):
         """
         return self._rtsp_client.set_progress([start_seq, current_seq, last_seq])
 
-    # endregion
-
-    # region audio packet
-    def send_audio_packet(self, packet):
-        """
-        Send audio data over UDP as RTP packet.
-        :param packet: audio packet instance
-        """
-        # make sure the handshake is finished
-        if not self.server_port or not self._audio_socket:
-            return
-
-        self._audio_socket.sendto(packet.to_data(), (self.ip, self.server_port))
-        logger.debug("Send audio packet:\n\033[91m%s\033[0m", packet)
     # endregion

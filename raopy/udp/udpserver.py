@@ -9,6 +9,7 @@ from collections import namedtuple
 from select import select
 from threading import Thread
 
+from raopy.util import EventHook
 from ..rtp import rtp_timestamp_for_seq
 from ..util import NtpTime, low32
 from .timingpacket import TIMING_PACKET_SIZE, TimingPacket
@@ -47,10 +48,24 @@ class UDPServer(object):
     """
     UDP Server to allow sending timing information to the host.
     """
-    def __init__(self):
+    def __init__(self, receivers):
+        """
+        :param receivers: reference to all current receivers in this playgroup
+        """
         # set a NTP reference time
         NtpTime.initialize()
 
+        self._receivers = receivers
+        self.timing = None
+        self.control = None
+
+        # callback when a lost packet should be resend
+        self.on_need_resend = EventHook()
+
+    def open(self):
+        """
+        Find open sockets for control and timing port, open them and listen for incoming connections.
+        """
         s, p = next(find_open_ports(DEFAULT_TIMING_PORT))
         self.timing = SocketSpecification(s, p, "timing")
 
@@ -60,29 +75,6 @@ class UDPServer(object):
         self._is_listening = False
         # start listening and responding to incoming packets
         self.start_responding()
-
-    def send_control_sync(self, receivers, seq, is_first):
-        """
-        Send a control packet to all registered receivers.
-        :param receivers: list with all receiver instances
-        :param seq: sequence number
-        :param is_first: is the package the first control package
-        """
-        if not self.control.socket:
-            return
-
-        for receiver in receivers:
-            if not receiver.control_port:
-                return
-
-            sync_packet = SyncPacket.create(is_first=is_first,
-                                            now_minus_latency=rtp_timestamp_for_seq(seq, include_latency=False),
-                                            now=rtp_timestamp_for_seq(seq),
-                                            time_last_sync=NtpTime.get_timestamp())
-
-            dest = (receiver.ip, receiver.control_port)
-            control_logger.debug("Send control packet tp {0}:\n\033[91m{1}\033[0m".format(dest, sync_packet))
-            self.control.socket.sendto(sync_packet.to_data(), dest)
 
     def close(self):
         """
@@ -98,6 +90,35 @@ class UDPServer(object):
         if self.control:
             self.control.socket.close()
             self.control = None
+
+    def send_control_sync(self, seq, receivers=None, is_first=False):
+        """
+        Send a control packet to all registered receivers.
+        :param receivers: list with all receiver instances
+        :param seq: sequence number
+        :param is_first: is the package the first control package
+        """
+        if not self.control.socket:
+            return
+
+        # send to all receivers on default
+        if receivers is None:
+            receivers = self._receivers
+
+        ntp_time = NtpTime.get_timestamp()
+
+        for receiver in set(receivers):
+            if not receiver.control_port:
+                return
+
+            sync_packet = SyncPacket.create(is_first=is_first,
+                                            now_minus_latency=rtp_timestamp_for_seq(seq, include_latency=False),
+                                            now=rtp_timestamp_for_seq(seq),
+                                            time_last_sync=ntp_time)
+
+            dest = (receiver.ip, receiver.control_port)
+            control_logger.debug("Send control packet tp {0}:\n\033[91m{1}\033[0m".format(dest, sync_packet))
+            self.control.socket.sendto(sync_packet.to_data(), dest)
 
     def start_responding(self):
         """
@@ -119,6 +140,11 @@ class UDPServer(object):
 
                     # read the timing packet
                     response = TimingPacket.parse(data)
+
+                    # only listen to known receivers
+                    recvs = [r for r in self._receivers if r.ip == addr[0]]
+                    if len(recvs) == 0:
+                        continue
 
                     if not response:
                         timing_logger.warning("Skipping malformed timing packet from {0}.".format(addr))
@@ -142,10 +168,19 @@ class UDPServer(object):
                 try:
                     select([self.control.socket], [], [])
                     data, addr = self.control.socket.recvfrom(1024)
+
+                    # only listen to known receivers
+                    recvs = [r for r in self._receivers if r.ip == addr[0]]
+                    if len(recvs) == 0:
+                        continue
+
                     response = ResendPacket.parse(data)
                     if not response:
                         control_logger.warning("Skipping malformed control packet from {0}.".format(addr))
                     control_logger.debug("Received control packet from {0}:\n\033[94m{1}\033[0m".format(addr, response))
+
+                    # request a resend
+                    self.on_need_resend.fire(response.missed_seqnum, set(recvs))
                 except (OSError, ValueError):
                     # socket closed
                     break
