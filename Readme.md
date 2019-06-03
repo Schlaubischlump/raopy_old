@@ -4,6 +4,7 @@ AirPlay audio for the rest of us. An (hopefully) easy to use implementation of t
 
 ## Todo
 - Cleanup the code! 
+- Fix: Move the seq argument out of RTSP Client and work with the rtp time instead
 - Fix: Audio is only send to one device
 - Fix: connection interrupted, because receiver went offline 
 - Fix: stop function (including when the end of the stream is reached)

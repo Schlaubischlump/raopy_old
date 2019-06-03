@@ -17,6 +17,12 @@ class NotEnoughBandwidthError(Exception):
     pass
 
 
+class RTSPRequestTimeoutError(Exception):
+    """
+    Called when the RTSP connection times out.
+    """
+    pass
+
 class DeviceAuthenticationError(Exception):
     """
     Thrown in the >= 10.2 authentication process for various errors.

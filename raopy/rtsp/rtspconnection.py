@@ -68,19 +68,19 @@ class RTSPConnection(object):
         self._socket.sendto(req.to_data(), self.address)
         return True
 
-    def get_response(self):
+    def get_response(self, timeout=2):
         """
         Wait until a response is received an return it. This method is blocking.
         :return: next RTSPResponse from the _response_queue
         """
-        return self._response_queue.get(block=True)
+        return self._response_queue.get(block=True, timeout=timeout)
 
     def listen_for_responses(self):
         """
         Start a background thread to listen to incoming messages from the airplay receiver.
         """
         # regex to find header information inside the data
-        header_regex = re.compile(b"(RTSP/\d+.\d+\s\d{3}\s\w+?\\r\\n(?s:.*?)\\r\\n\\r\\n)")
+        header_regex = re.compile(b"(RTSP/\d+.\d+\s\d{3}\s(?s:.*?)\\r\\n(?s:.*?)\\r\\n\\r\\n)")
         buffer_size = 1024
 
         def listen():

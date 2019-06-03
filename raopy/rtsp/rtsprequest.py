@@ -15,6 +15,12 @@ class RTSPRequest(object):
         :param body: body data
         :param digest_info: DigestInfo tuple for authentication
         """
+        self.uri = uri
+        self.method = method
+        self.header = header
+        self.body = body
+        self.digest_info = digest_info
+
         # create header
         h = to_bytes("{0} {1} RTSP/1.0\r\n".format(str(method), uri))
         for key, value in header.items():

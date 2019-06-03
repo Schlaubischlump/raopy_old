@@ -17,17 +17,17 @@ set_logs_enabled(LOG.GROUP | LOG.RTSP)
 set_loglevel(LOG.ALL, logging.DEBUG)
 set_loglevel(LOG.RECEIVER, logging.INFO)
 
-
-SHAIRPORT_DEVICE = "MacBookPro._raop._tcp.local."
-SHAIRPORT_DEVICE1 = "D0D2B08AFC10@Wohnzimmer._raop._tcp.local."
-SHAIRPORT_DEVICE2 = "1C1AC0A2A0E8@ATV._raop._tcp.local."
+SHAIRPORT_DEVICE3 = "JonasMacbookpro._raop._tcp.local."
+SHAIRPORT_DEVICE1 = "MacBookPro._raop._tcp.local."
+SHAIRPORT_DEVICE0 = "Wohnzimmer._raop._tcp.local."
+SHAIRPORT_DEVICE2 = "ATV._raop._tcp.local."
 
 
 group = RAOPPlayGroup()
 
 
 def add_receiver(device, name, info):
-    if SHAIRPORT_DEVICE == name.split("@")[1]:# or SHAIRPORT_DEVICE1 == device.name:
+    if SHAIRPORT_DEVICE0 == name.split("@")[1] or SHAIRPORT_DEVICE1 == name.split("@")[1]:
         try:
             group.add_receiver(device)
         except DeviceAuthenticationRequiresPasswordError:
@@ -58,24 +58,6 @@ def add_receiver(device, name, info):
             # try to connect with new credentials
             group.add_receiver(device, credentials=(auth_identifier, auth_secret))
 
-        group.play("sample.mp3")
-
-        sleep(4)
-        print("Pause it now.")
-        #group.stop()
-        group.pause()
-        #group.set_progress(90000)
-        sleep(10)
-        print("Resume it now.")
-        group.resume()
-
-        #sleep(14)
-        #print("Pause it now.")
-        #group.pause()
-        #sleep(6)
-        #print("Resume it now.")
-        #group.resume()
-
 
 def remove_receiver(device, name, info):
     group.remove_receiver(device)
@@ -87,7 +69,25 @@ listener.on_disconnect += remove_receiver
 listener.start_listening()
 
 # listen for new devices for 5 seconds
-sleep(65)
+sleep(5)
+
+group.play("sample.mp3")
+
+# sleep(4)
+# print("Pause it now.")
+# group.stop()
+#group.pause()
+# group.set_progress(90000)
+#sleep(4)
+# print("Resume it now.")
+#group.resume()
+
+#sleep(14)
+# print("Pause it now.")
+#group.pause()
+#sleep(6)
+# print("Resume it now.")
+#group.resume()
 
 # play until the track is finished
 while group.status != STATUS.STOPPED:

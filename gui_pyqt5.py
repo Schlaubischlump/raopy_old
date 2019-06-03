@@ -1,11 +1,17 @@
 import os
 import sys
 import logging
-from PyQt5.QtWidgets import QApplication, QListView, QHBoxLayout, QVBoxLayout, QMainWindow, QWidget, QPushButton, QFileDialog
+
+import keyring
+from PyQt5.QtWidgets import QApplication, QListView, QHBoxLayout, QVBoxLayout, QMainWindow, QWidget, QPushButton, \
+    QFileDialog, QInputDialog, QLineEdit
 from PyQt5.QtGui import QStandardItemModel, QStandardItem
 from PyQt5.QtCore import Qt
 
 from raopy import RAOPPlayGroup, RAOPServiceListener, STATUS
+from raopy.exceptions import DeviceAuthenticationRequiresPasswordError, DeviceAuthenticationWrongPasswordError, \
+    DeviceAuthenticationRequiresPinCodeError, DeviceAuthenticationPairingError, RTSPRequestTimeoutError, \
+    DeviceAuthenticationWrongPinCodeError, DeviceAuthenticationError
 from raopy.util import set_logs_enabled, set_loglevel, LOG
 
 # enable only the most basic logs
@@ -107,7 +113,88 @@ class AirplayGUI(QApplication):
             for i in range(self.model.rowCount()):
                 item = self.model.item(i)
                 if item.checkState() == Qt.Checked:
-                    self.raop_group.add_receiver(item.player)
+                    self.add_receiver(item.player)
+
+    def show_password_prompt(self, title="", message=""):
+        """
+        Show a password prompt.
+        """
+        text, okPressed = QInputDialog.getText(self.win, title, message, QLineEdit.Password, "")
+        if okPressed:
+            return text
+        return None
+
+    def add_receiver(self, receiver):
+        """
+        Try to add a device to the current playback session.
+        :param receiver: receiver to add
+        :return: True on success, False otherwise
+        """
+        try:
+            return self.raop_group.add_receiver(receiver)
+        # requiere password
+        except DeviceAuthenticationRequiresPasswordError:
+
+            # repeat until the user enters a valid password
+            while True:
+                try:
+                    pwd = self.show_password_prompt(title="Password required:",
+                                                    message="Enter the password for {0}".format(receiver.hostname))
+                    # user pressed cancel
+                    if pwd is None:
+                        return False
+
+                    # user did enter a password
+                    if pwd:
+                        return self.raop_group.add_receiver(receiver, password=pwd)
+                except (DeviceAuthenticationWrongPasswordError, RTSPRequestTimeoutError):
+                    # wrong password or the connection timed out
+                    continue
+
+        # authentication required by TvOS >= 10.2
+        except DeviceAuthenticationRequiresPinCodeError:
+
+            # connect with a pin code
+            keychain = "Pygroup"
+            # check if we already got credentials for this device
+            auth_data = keyring.get_password(keychain, receiver.name)
+            if auth_data:
+                auth_identifier, auth_secret = auth_data.split(":")
+                return self.raop_group.add_receiver(receiver, credentials=(auth_identifier, auth_secret))
+            else:
+                while True:
+                    try:
+                        # request a pin code an generate credentials for this device
+                        self.raop_group.request_pincode_for_device(receiver)
+                    except (DeviceAuthenticationPairingError, RTSPRequestTimeoutError):
+                        # pairing request failed... lets try again
+                        continue
+
+                    pin = self.show_password_prompt(title=".",
+                                                    message="Enter the pin for {0}".format(receiver.hostname))
+                    # cancel button clicked
+                    if pin is None:
+                        return False
+
+                    try:
+                        # create new credentials
+                        auth_identifier, auth_secret = self.raop_group.request_login_credentials_for_device_(receiver,
+                                                                                                             pin)
+                        # save the credentials if we are able to connect using them
+                        con = self.raop_group.add_receiver(receiver, credentials=(auth_identifier, auth_secret))
+                        if con:
+                            keyring.set_password(keychain, self.raop_group.name,
+                                                 "{0}:{1}".format(auth_identifier, auth_secret))
+                        return con
+                    except (DeviceAuthenticationError, DeviceAuthenticationWrongPinCodeError, RTSPRequestTimeoutError):
+                        # authentication failed, let's try this again
+                        continue
+
+        # the request to connect the device timed out ... just give up
+        except RTSPRequestTimeoutError:
+            return False
+
+        return False
 
     def checkStateChanged(self, item):
         """
@@ -115,8 +202,11 @@ class AirplayGUI(QApplication):
         :param item: checked listview item
         """
         # add a device to the current playback if it is checked
+        print("check....")
         if item.checkState() == Qt.Checked:
-            self.raop_group.add_receiver(item.player)
+            if not self.add_receiver(item.player):
+                print("uncheck")
+                item.setCheckState(Qt.Unchecked)
         elif item.checkState() == Qt.Unchecked:
             self.raop_group.remove_receiver(item.player)
 

@@ -35,6 +35,9 @@ class RTSPResponse(object):
         return res
 
     def __repr__(self):
+        return str(self)
+
+    def __str__(self):
         s = "{0}/{1} {2} {3}\n".format(self.protocol, self.protocol_version, self.code, self.status)
         s += "\n".join(["{0}: {1}".format(k, v) for k, v in self.headers.items()])
         if self.body:

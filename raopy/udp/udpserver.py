@@ -109,6 +109,7 @@ class UDPServer(object):
 
         for receiver in set(receivers):
             if not receiver.control_port:
+                print("no control port....")
                 return
 
             sync_packet = SyncPacket.create(is_first=is_first,
@@ -116,6 +117,7 @@ class UDPServer(object):
                                             now=rtp_timestamp_for_seq(seq),
                                             time_last_sync=ntp_time)
 
+            print("Send control: ", receiver.ip, seq, rtp_timestamp_for_seq(seq), is_first)
             dest = (receiver.ip, receiver.control_port)
             control_logger.debug("Send control packet tp {0}:\n\033[91m{1}\033[0m".format(dest, sync_packet))
             self.control.socket.sendto(sync_packet.to_data(), dest)
@@ -152,7 +154,8 @@ class UDPServer(object):
                     timing_logger.debug("Received timing packet from {0}:\n\033[94m{1}\033[0m".format(addr, response))
 
                     # send responds to timing packets
-                    request = TimingPacket.create(reference_time=response.send_time, received_time=NtpTime.get_timestamp(),
+                    request = TimingPacket.create(reference_time=response.send_time,
+                                                  received_time=NtpTime.get_timestamp(),
                                                   send_time=NtpTime.get_timestamp())
                     timing_logger.debug("Send timing packet to {0}:\n\033[91m{1}\033[0m".format(addr, request))
                     self.timing.socket.sendto(request.to_data(), addr)
@@ -180,6 +183,7 @@ class UDPServer(object):
                     control_logger.debug("Received control packet from {0}:\n\033[94m{1}\033[0m".format(addr, response))
 
                     # request a resend
+                    print("Request resend: ", response.missed_seqnum)
                     self.on_need_resend.fire(response.missed_seqnum, set(recvs))
                 except (OSError, ValueError):
                     # socket closed

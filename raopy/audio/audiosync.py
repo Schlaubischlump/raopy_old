@@ -3,7 +3,7 @@ Sync audio playback information across connected devices by sending the audio pa
 corresponding sync packets.
 """
 import socket
-from threading import Timer
+from threading import Timer, Lock, Event
 from random import randint
 
 from ..rtp import rtp_timestamp_for_seq
@@ -70,10 +70,10 @@ class AudioSync(object):
         self._receivers = receivers
 
         # set a random sequence number which is always greater then the smallest latency possible => next_seq >= 0
-        self.start_seq = randint(self.sequence_latency, 0xffff)
+        self.start_seq = 0#randint(self.sequence_latency, 0xffff)
 
         # a reference sequence number which indicates when the stream started / resumed playback
-        self.ref_seq = self.start_seq
+        self.ref_seq = self.start_seq#-self.sequence_latency
 
         # sequence number of next packet to send
         self.next_seq = self.ref_seq
@@ -96,6 +96,9 @@ class AudioSync(object):
 
         # encoder instance for alac encoder
         self._encoder = ALACEncoder(frames_per_packet=FRAMES_PER_PACKET)
+
+        # make accessing the next sequence number thread save
+        self._next_seq_lock = Lock()
 
     # region open / close socket
     def open(self):
@@ -144,7 +147,8 @@ class AudioSync(object):
         Get the sequence number of the next frame which should be played
         :return: current sequence number
         """
-        return self.next_seq
+        with self._next_seq_lock:
+            return self.next_seq
 
     @property
     def start_seq_number(self):
@@ -158,7 +162,7 @@ class AudioSync(object):
         """
         :return: latency in amount of sequences
         """
-        return (RAOP_FRAME_LATENCY + RAOP_LATENCY_MIN) // FRAMES_PER_PACKET
+        return (RAOP_FRAME_LATENCY + RAOP_LATENCY_MIN) // FRAMES_PER_PACKET + 2
     # endregion
 
     def send_packet(self, seq_num, receivers=None, is_resend=False):
@@ -171,16 +175,16 @@ class AudioSync(object):
         if not self.is_streaming or not self.audio_file:
             return False
 
-        first_packet = (seq_num == self.ref_seq)
-
         # use all receivers as default
         if receivers is None:
             receivers = self._receivers
 
+        first_packet = (seq_num == self.ref_seq)# + self.sequence_latency)
+
         # send a control packet every SYNC_PERIOD number of audio packets (except on a resend)
         if (seq_num-self.ref_seq) % SYNC_PERIOD == 0 and not is_resend:
             # inform all listener
-            self.on_need_sync.fire(seq_num, set(receivers))
+            self.on_need_sync.fire(seq_num, set(receivers), is_first=first_packet)
 
         # calculate a relative sequence number between 0 and #(Frames in audio file)
         # this can be smaller than zero, e.g. if we pause on second 1 and subtract the latency of ~2 seconds
@@ -207,6 +211,8 @@ class AudioSync(object):
             # create the audio packet and instruct each device to send it over its udp connection
             packet = AudioPacket(seq_num, alac_data, timestamp, self._device_magic, is_first=first_packet)
             self._audio_socket.sendto(packet.to_data(), (receiver.ip, receiver.server_port))
+            if is_resend:
+                print("send audio packet: ", seq_num, " is_first: ", first_packet)
 
         return True
 
@@ -222,25 +228,33 @@ class AudioSync(object):
         # set the next audio packet sequence number to the start number
         self.next_seq = self.start_seq
 
-    def start_streaming(self):
+    def start_streaming(self, seq=None):
         """
-        Start streaming the music file.
+        Start streaming the music file at a specific sequence. Do not include the latency in this sequence number!
+        :param seq: start playback at this sequence number
         """
         if self.is_streaming or not self.audio_file:
             return False
 
         self.is_streaming = True
 
+        # set the correct start position
+        if seq is None:
+            seq = self.start_seq
+
+        self.ref_seq = seq# - self.sequence_latency
+        self.next_seq = self.ref_seq
+
         # update the last burst timestamp
         self.burst_time_ref = milliseconds_since_1970()
-
-        # inform all listener
-        self.on_stream_started.fire(self.current_seq_number)
 
         # start sending audio in a background thread
         self.timer = Timer(0, self.sync_audio)
         self.timer.name = SYNC_AUDIO_THREAD_NAME
         self.timer.start()
+
+        # inform all listener
+        self.on_stream_started.fire(seq)
 
         return True
 
@@ -251,15 +265,7 @@ class AudioSync(object):
         marked as a "first" packet, and it will be followed by an Audio packet with the "first" marker too.
         """
         # set the reference sequence to the correct position
-        tmp_ref_seq = self.ref_seq
-        self.ref_seq = self.next_seq
-
-        # rollback on error
-        if not self.start_streaming():
-            self.ref_seq = tmp_ref_seq
-            return False
-
-        return True
+        return self.start_streaming(self.next_seq)
 
     def pause_streaming(self):
         """
@@ -270,15 +276,15 @@ class AudioSync(object):
 
         self.is_streaming = False
 
-        # cancel the next timer
+        # cancel the timer
         if self.timer:
             self.timer.cancel()
             self.timer = None
 
         # inform all listeners that the stream paused
-        self.on_stream_paused.fire(self.current_seq_number - 1)
+        # current_seq_number is thread safe, therefore the stream will be paused when we reach this part
+        self.on_stream_paused.fire(self.current_seq_number)
 
-        # after we resume the stream with have to start ~2 seconds earlier
         self.next_seq -= self.sequence_latency
 
         return True
@@ -287,14 +293,12 @@ class AudioSync(object):
         """
         Stop streaming.
         """
-        stop_seq = self.current_seq_number-1
-
         # pause the stream, this will reduce the current_seq_number by seq_latency
         if self.is_streaming:
             self.pause_streaming()
 
         # inform the listeners about the stop with the correct unmodified seq number
-        self.on_stream_stopped.fire(stop_seq)
+        self.on_stream_stopped.fire(self.current_seq_number)
 
         self.audio_file = None
 
@@ -332,13 +336,15 @@ class AudioSync(object):
         # delta value to this start value.
         current_seq = self.ref_seq + ms_to_seq_num(elapsed)
 
-        # Send all packets up to the current one and increase the next sequence number thereby.
-        for i in range(self.next_seq, current_seq):
-            # interrupt streaming if the stream was paused or stopped or some other error occured
-            if self.send_packet(i):
-                self.next_seq += 1
-            else:
-                return
+        # make sure that the next sequence number is updated before another thread can read it
+        with self._next_seq_lock:
+            # Send all packets up to the current one and increase the next sequence number thereby
+            for i in range(self.next_seq, current_seq):
+                    # interrupt streaming if the stream was paused or stopped or some other error occured
+                    if self.send_packet(i):
+                        self.next_seq += 1
+                    else:
+                        return
 
         # schedule next sync event
         self.timer = Timer(STREAM_LATENCY, self.sync_audio)

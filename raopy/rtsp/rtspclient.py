@@ -3,6 +3,7 @@ Handle the rtsp connection between the client and the receiver.
 
 """
 import re
+from _queue import Empty
 from enum import Enum, IntEnum
 from logging import getLogger
 from threading import Timer
@@ -18,8 +19,7 @@ from ..config import DEFAULT_RTSP_TIMEOUT, IV, RSA_AES_KEY, RAOP_LATENCY_MIN
 from ..exceptions import DeviceAuthenticationPairingError, DeviceAuthenticationWrongPasswordError, \
     DeviceAuthenticationError, DeviceAuthenticationWrongPinCodeError, NotEnoughBandwidthError, BadResponseError, \
     DeviceAuthenticationRequiresPinCodeError, DeviceAuthenticationRequiresPasswordError, UnsupportedCryptoError, \
-    UnsupportedCodecError
-
+    UnsupportedCodecError, RTSPRequestTimeoutError
 
 logger = getLogger("RTSPLogger")
 
@@ -110,9 +110,8 @@ class RTSPClient(object):
         self.user_agent = user_agent
 
         self.status = None
+
         # If the rtsp connection does not responds in a given time frame, the connection will be closed.
-        # This inactive timer is necessary to get informed when the time is up.
-        self._timer = None
         self.timeout = DEFAULT_RTSP_TIMEOUT
 
         # generate necessary ids
@@ -165,25 +164,6 @@ class RTSPClient(object):
                                                                              self.control_port, self.timing_port,
                                                                              self.dacp_id, self.active_remote)
 
-    # region timeout
-    def start_timeout(self):
-        """
-        Start the server responds timeout.
-        """
-        if not self._timer:
-            self._timer = Timer(self.timeout, lambda: self.cleanup(RTSPReason.TIMEOUT))
-            self._timer.name = "raopy-rtsp_timeout-thread"
-            self._timer.start()
-
-    def reset_timeout(self):
-        """
-        Cancel the server responds timeout.
-        """
-        if self._timer:
-            self._timer.cancel()
-            self._timer = None
-    # endregion
-
     # region helper
     def send_and_recv(self, request, allowed_codes=None):
         """
@@ -199,10 +179,12 @@ class RTSPClient(object):
         logger.debug("Send request:\n\033[91m" + str(request) + "\033[0m")
 
         # start a timer for each send / receive. If the response takes to long, we consider the server gone
-        self.start_timeout()
         self.connection.send_request(request)
-        response = self.connection.get_response()
-        self.reset_timeout()
+        try:
+            response = self.connection.get_response(timeout=self.timeout)
+        except Empty:
+            self.cleanup(RTSPReason.TIMEOUT)
+            raise RTSPRequestTimeoutError("RTSP request {0} timed out.".format(request.method))
 
         logger.debug("Received response:\n\033[94m" + str(response) + "\033[0m")
 
@@ -291,7 +273,7 @@ class RTSPClient(object):
 
             self.cseq += 1
             header = self._get_default_header()
-            rtp_sync_time = rtp_timestamp_for_seq(next_seq)
+            rtp_sync_time = rtp_timestamp_for_seq(next_seq, include_latency=True)
 
             header.update({
                 "RTP-Info": "seq={0};rtptime={1}".format(next_seq, rtp_sync_time)
@@ -314,11 +296,11 @@ class RTSPClient(object):
         """
         # make sure handshake has finished
         if self.status == RTSPStatus.PLAYING:
+            self.status = RTSPStatus.SETVOLUME
+
             # if the handshake was correctly performed, this should be set
             if not digest_info:
                 digest_info = self.digest_info
-
-            self.status = RTSPStatus.SETVOLUME
 
             # calculate airplay volume
             if vol >= 100:
@@ -347,15 +329,15 @@ class RTSPClient(object):
         :return True on success, otherwise False
         """
         if self.status == RTSPStatus.PLAYING:
+            self.status = RTSPStatus.SETPROGRESS
+
             if not digest_info:
                 digest_info = self.digest_info
 
-            self.status = RTSPStatus.SETPROGRESS
-
             # calculate rtp timestamp for each sequence number
-            prog = [rtp_timestamp_for_seq(progress[0], include_latency=False),
-                    rtp_timestamp_for_seq(progress[1], include_latency=False),
-                    rtp_timestamp_for_seq(progress[2], include_latency=False)]
+            prog = [rtp_timestamp_for_seq(progress[0], include_latency=True),
+                    rtp_timestamp_for_seq(progress[1], include_latency=True),
+                    rtp_timestamp_for_seq(progress[2], include_latency=True)]
 
             self.cseq += 1
             header = self._get_default_header()
@@ -369,17 +351,30 @@ class RTSPClient(object):
 
         return False
 
-    def set_track_info(self, info, digest_info=None):
+    def set_track_info(self, info, seq, digest_info=None, **kwargs):
         """
         :param info: dictionary with keys: name, artist, album
+        :param seq: start sequence number of this track
+        :param kwargs: dmaap data to send
         """
         if self.status == RTSPStatus.PLAYING:
+            self.status = RTSPStatus.SETDAAP
+
             if not digest_info:
                 digest_info = self.digest_info
 
-            self.status = RTSPStatus.SETDAAP
             self.cseq += 1
             header = self._get_default_header()
+            header.update({"Content-Type": "application/x-dmap-tagged"})
+            header.update({"RTP-Info": "rtptime={1}".format(rtp_timestamp_for_seq(seq, include_latency=True))})
+
+            # Todo: add the keys
+            body = b""
+            for code, data in kwargs:
+                body += b""
+
+            req = RTSPRequest(self.default_uri, "SET_PARAMETER", header, body=body, digest_info=digest_info)
+
             # Todo send request
             self.status = RTSPStatus.PLAYING
 
@@ -388,10 +383,11 @@ class RTSPClient(object):
         :param data: new artwork data base64 encoded
         """
         if self.status == RTSPStatus.PLAYING:
+            self.status = RTSPStatus.SETART
+
             if not digest_info:
                 digest_info = self.digest_info
 
-            self.status = RTSPStatus.SETART
             self.cseq += 1
             header = self._get_default_header()
             # Todo send request
@@ -462,7 +458,7 @@ class RTSPClient(object):
         res = self.send_and_recv(req)
 
         if res.code != 200:
-            #self.cleanup(RTSPReason.AUTHENTICATION)
+            self.cleanup(RTSPReason.AUTHENTICATION)
             raise DeviceAuthenticationWrongPinCodeError("Wrong pin code used.")
 
         # 5. Run AES
@@ -472,7 +468,7 @@ class RTSPClient(object):
         res = self.send_and_recv(req)
 
         if res.code != 200:
-            #self.cleanup(RTSPReason.AUTHENTICATION)
+            self.cleanup(RTSPReason.AUTHENTICATION)
             raise DeviceAuthenticationWrongPinCodeError("Can not confirm authentication secret.")
 
         return auth_identifier, auth_secret

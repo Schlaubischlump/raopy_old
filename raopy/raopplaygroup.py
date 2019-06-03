@@ -28,10 +28,10 @@ def is_alive(func):
     :param throw_exception:
     :return:
     """
-    def func_wrapper(self, *args):
+    def func_wrapper(self, *args, **kwargs):
         if self.status == STATUS.CLOSED:
             raise PlayGroupClosedError("{0} is already closed. Create a new group.".format(self))
-        return func(self, *args)
+        return func(self, *args, **kwargs)
     return func_wrapper
 
 
@@ -85,7 +85,7 @@ class RAOPPlayGroup(object):
     def __str__(self):
         return "{0}<{1}>".format(self.__class__.__name__, self.name)
 
-    def _log_event(self, event_name, seq_num, *args):
+    def _log_event(self, event_name, seq_num, *args, **kwargs):
         """
         :param event_name: name of the received event
         :param seq_num: sequence number provided by the name
@@ -101,13 +101,14 @@ class RAOPPlayGroup(object):
         """
         self._audio_sync.send_packet(seq, receivers, is_resend=True)
 
-    def on_need_sync(self, seq, receivers):
+    def on_need_sync(self, seq, receivers, is_first=False):
         """
         Send a control packet to all receivers
         :param seq: sequence number
         :param receivers: list of receivers which should receive the packet
+        :param is_first: True if this is the first packet
         """
-        self._udp_server.send_control_sync(seq, receivers, is_first=self._audio_sync.ref_seq)
+        self._udp_server.send_control_sync(seq, receivers, is_first=is_first)
     # endregion
 
     # region connect / disconnect
@@ -138,18 +139,34 @@ class RAOPPlayGroup(object):
         :return: True on success, otherwise False
         """
         if recv not in self._receivers:
+            # sequence number for rtsp request
+            start_seq = self._audio_sync.ref_seq
+
             # find and open the udp ports for timing and control data as well as the audio socket
             if len(self._receivers) == 0:
                 self._udp_server.open()
                 self._audio_sync.open()
+                # the first device has to fill its buffer before the stream starts
+                #start_seq += self._audio_sync.sequence_latency
+
+            # add the device to the list, to allow the udp server to respond
+            self._receivers.add(recv)
 
             udp_ports = self._udp_server.control.port, self._udp_server.timing.port
 
             # if we are already playing the device should automatically start with the playback
             # Todo: maybe it would be better to just send an OPTION request twice to check if the device is
             #  password protected or needs credentials instead of a handshake
-            recv.connect(udp_ports, self._audio_sync.next_seq, password, credentials)
-            self._receivers.add(recv)
+            try:
+                recv.connect(udp_ports, start_seq, password, credentials)
+            except Exception as e:
+                # if the connection fails because of a password request or something like this we remove the device
+                self._receivers.remove(recv)
+                raise e
+
+            # send an initial control sync
+            #if len(self._receivers) == 0:
+            #    self._udp_server.send_control_sync(start_seq, [recv], is_first=True)
 
             return True
         return False
@@ -168,6 +185,9 @@ class RAOPPlayGroup(object):
 
             # close the udp port if the last device was removed
             if len(self._receivers) == 0:
+                # stop playback
+                self.stop()
+                # close all sockets
                 self._udp_server.close()
                 self._audio_sync.close()
 
@@ -260,9 +280,11 @@ class RAOPPlayGroup(object):
 
         self.status = STATUS.PAUSED
 
+        print(self._audio_sync.current_seq_number)
+
         # inform the user that the stream stopped
-        cur = cur_seq + self._audio_sync.sequence_latency - 1
-        self.on_pause.fire(seq_num_to_ms(cur))
+        #cur = cur_seq + self._audio_sync.sequence_latency-1
+        self.on_pause.fire(seq_num_to_ms(cur_seq))
 
         return True
 
