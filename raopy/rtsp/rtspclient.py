@@ -37,7 +37,6 @@ def mutex_lock(func):
     Simple decorator to mutex lock a whole function.
     """
     def func_wrapper(self, *args, **kwargs):
-        print(self._lock)
         with self._lock:
             return func(self, *args, **kwargs)
     return func_wrapper
@@ -105,7 +104,7 @@ class RTSPClient(object):
     """
 
     def __init__(self, ip, port, codecs=RAOPCodec.ALAC, crypto=RAOPCrypto.CLEAR, user_agent=USER_AGENT,
-                 protocol_version=1.0):
+                 dacp_id=None, active_remote=None, protocol_version=1.0):
         """
         :param ip: server ip address
         :param port: server port
@@ -138,8 +137,8 @@ class RTSPClient(object):
         self.timeout = DEFAULT_RTSP_TIMEOUT
 
         # generate necessary ids
-        self.active_remote = random_int(9)
-        self.dacp_id = random_hex(8)
+        self.active_remote = active_remote or random_int(9)
+        self.dacp_id = dacp_id or random_hex(8)
 
         # main uri used in the first line of the rtsp request
         client_ip = get_ip_address()
@@ -190,7 +189,7 @@ class RTSPClient(object):
     @property
     def status(self):
         """
-        Readonly status.
+        Readonly status of the client.
         :return: current RTSPStatus
         """
         return self._status

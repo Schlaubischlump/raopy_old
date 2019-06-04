@@ -5,7 +5,8 @@ from enum import Enum
 from functools import partial
 from logging import getLogger
 
-from .util import EventHook
+from .util import EventHook, random_int, random_hex
+from .remote import AirplayServer, AirplayCommand
 from .udp import UDPServer
 from .exceptions import PlayGroupClosedError
 from .audio import AudioSync, ms_to_seq_num, seq_num_to_ms
@@ -66,6 +67,10 @@ class RAOPPlayGroup(object):
         # current playback status
         self.status = STATUS.STOPPED
 
+        # create the Airplay sever to receive remote commands
+        self._airplay_remote_server = AirplayServer(dacp_id=random_hex(8), active_remote=random_int(9), port=52486)
+        self._airplay_remote_server.on_remote_command += self.on_remote_command
+
         # listen for sync callbacks
         self._audio_sync.on_stream_ended += lambda *args: self.stop()
 
@@ -93,6 +98,18 @@ class RAOPPlayGroup(object):
         group_logger.info("%s received event: %s at sequence: %s", str(self), event_name, str(seq_num))
 
     # region callbacks
+    def on_remote_command(self, command):
+        """
+        Received an airplay remote command.
+        :param command:
+        """
+        if command == AirplayCommand.PAUSE:
+            print("PAUUUUSSSSSEEE")
+            self.pause()
+        elif command == AirplayCommand.PLAY or command == AirplayCommand.PLAY_RESUME:
+            print("PLLLAAAAAYYYYY")
+            self.play_resume()
+
     def on_need_resend(self, seq, receivers):
         """
         Resend a missing packet to the correct receiver without triggering a control sync.
@@ -144,21 +161,26 @@ class RAOPPlayGroup(object):
 
             # find and open the udp ports for timing and control data as well as the audio socket
             if len(self._receivers) == 0:
+                # open timing and control ports
                 self._udp_server.open()
+                # open the audio port
                 self._audio_sync.open()
-                # the first device has to fill its buffer before the stream starts
-                #start_seq += self._audio_sync.sequence_latency
 
             # add the device to the list, to allow the udp server to respond
             self._receivers.add(recv)
 
             udp_ports = self._udp_server.control.port, self._udp_server.timing.port
 
-            # if we are already playing the device should automatically start with the playback
-            # Todo: maybe it would be better to just send an OPTION request twice to check if the device is
-            #  password protected or needs credentials instead of a handshake
             try:
+                # update the dacp-id and active remote data to allow remote command
+                recv.dacp_id = self._airplay_remote_server.dacp_id
+                recv.active_remote = self._airplay_remote_server.active_remote
+                # connect the device
                 recv.connect(udp_ports, start_seq, password, credentials)
+
+                # start listening for remote commands if at least one device connected successfully
+                if len(self._receivers) == 1:
+                    self._airplay_remote_server.start()
             except Exception as e:
                 # if the connection fails because of a password request or something like this we remove the device
                 self._receivers.remove(recv)
@@ -190,6 +212,8 @@ class RAOPPlayGroup(object):
                 # close all sockets
                 self._udp_server.close()
                 self._audio_sync.close()
+                # stop the remote server
+                self._airplay_remote_server.stop()
 
             return True
         return False

@@ -22,6 +22,7 @@ AirPlay audio for the rest of us. An (hopefully) easy to use implementation of t
 - Fix: seekable audiofile implementation (there is a bug .frames can't be written from python)
 - Fix: throw error if no device is connected and you try to stream audio or something like this (this includes the connection is lost)
 - use zeroconf information for encryption type and codecs (authentication and password as well ?)
+- Test with Python2.7
 
 > Note: Sending RTSP is (is it ... ?) blocking, sending audio packets is not. This is expected behaviour 
 

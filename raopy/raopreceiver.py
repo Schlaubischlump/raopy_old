@@ -94,6 +94,22 @@ class RAOPReceiver(object):
         Called when the RTSP connection is established.
         """
         self._rtsp_is_connected = True
+
+    @property
+    def dacp_id(self):
+        return self._rtsp_client.dacp_id
+
+    @dacp_id.setter
+    def dacp_id(self, value):
+        self._rtsp_client.dacp_id = value
+
+    @property
+    def active_remote(self):
+        return self._rtsp_client.active_remote
+
+    @dacp_id.setter
+    def active_remote(self, value):
+        self._rtsp_client.active_remote = value
     # endregion
 
     # region establish/destroy a connection

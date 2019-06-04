@@ -10,7 +10,8 @@ class LOG(IntEnum):
     SERVICE = 1 << 3  # log all newly detected airplay devices
     RECEIVER = 1 << 4  # log all device specific information including audio pakets
     GROUP = 1 << 5  # log all raop group specific information
-    ALL = 0b111111  # log all events
+    REMOTE = 1 << 6  # log airplay remote commands
+    ALL = 0b1111111  # log all events
 
     def logger_name(self):
         """
@@ -28,6 +29,8 @@ class LOG(IntEnum):
             return "RAOPReceiverLogger"
         if self == LOG.GROUP:
             return "RAOPPlaybackGroupLogger"
+        if self == LOG.REMOTE:
+            return "AirplayRemoteServerLogger"
         return ""
 
     def get_logger(self):
