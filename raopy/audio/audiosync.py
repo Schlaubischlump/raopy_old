@@ -129,6 +129,12 @@ class AudioSync(object):
 
     # region properties
     @property
+    def current_metadata(self):
+        if not self.audio_file.supports_metadata():
+            return None
+        return self.audio_file.get_metadata()
+
+    @property
     def total_seq_number(self):
         """
         Get the absolute sequence number of the last frame of the audio file.

@@ -221,8 +221,21 @@ class RAOPPlayGroup(object):
         # => establish an new RTSP connection to the airplay receiver
         for recv in self._receivers:
             recv.repair_connection(cur)
+
             # send the current progress
             recv.set_progress(start, cur, end)
+
+            # send the track information
+            metadata = self._audio_sync.current_metadata
+            if not metadata:
+                title, artist, album = "", "", ""
+            else:
+                title, artist, album = metadata.track_name, metadata.artist_name, metadata.album_name
+            recv.set_track_info(start, title=title, artist=artist, album=album)
+            if metadata.supports_images():
+                images = metadata.images()
+                if len(images) > 0:
+                    recv.set_artwork_data(start, images[0].data, images[0].mime_type)
 
         # start streaming the audio
         if self.status == STATUS.STOPPED:
@@ -358,10 +371,6 @@ class RAOPPlayGroup(object):
 
     @is_alive
     def set_artwork(self, artwork):
-        pass
-
-    @is_alive
-    def set_track_info(self, track_info):
         pass
 
     @is_alive

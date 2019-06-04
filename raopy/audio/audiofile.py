@@ -130,3 +130,6 @@ class AudioFile(object):
         :return: True if the metadata can be extracted, False otherwise
         """
         return self.file.supports_metadata()
+
+    def get_metadata(self):
+        return self.file.get_metadata()

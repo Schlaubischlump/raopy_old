@@ -12,6 +12,7 @@ AirPlay audio for the rest of us. An (hopefully) easy to use implementation of t
 
 ## Todo
 - Cleanup the code! 
+- Fix: Dmap classes have some problems with encoding certain ints
 - Fix: rewrite the audio-sync class, so that it is actually working and thread safe
 - Fix: Audio is sometimes only processed by some devices, but not all
 - Fix: connection interrupted, because receiver went offline 

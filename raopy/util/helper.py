@@ -41,9 +41,9 @@ def to_unicode(s):
 
 def to_hex(s):
     """
-    Convert a string to hex
-    :param s: string
-    :return: string converted to hex
+    Convert a bytes object to hex.
+    :param s: bytes object
+    :return: bytes converted to hex
     """
     return s.encode('hex') if IS_PY2 else s.hex()
 

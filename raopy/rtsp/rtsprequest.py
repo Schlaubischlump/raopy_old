@@ -6,12 +6,13 @@ DigestInfo = namedtuple("DigestInfo", ["username", "realm", "password", "nonce"]
 
 
 class RTSPRequest(object):
-    def __init__(self, uri, method, header, body=None, digest_info=None):
+    def __init__(self, uri, method, header, body=None, protocol_version=1.0, digest_info=None):
         """
         Convert a header dictionary to bytes which can be send using a socket.
         :param uri: receiver uri
         :param method: method to send (RTSPStatus)
         :param headers: dictionary containing the header information
+        :param protocol_version: rtsp protcol version number as float
         :param body: body data
         :param digest_info: DigestInfo tuple for authentication
         """
@@ -22,7 +23,7 @@ class RTSPRequest(object):
         self.digest_info = digest_info
 
         # create header
-        h = to_bytes("{0} {1} RTSP/1.0\r\n".format(str(method), uri))
+        h = to_bytes("{0} {1} RTSP/{2}\r\n".format(str(method), uri, protocol_version))
         for key, value in header.items():
             h += to_bytes(key) + b": " + to_bytes(value) + b"\r\n"
 

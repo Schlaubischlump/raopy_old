@@ -1,6 +1,7 @@
 from logging import getLogger
 
-from .rtsp import RTSPReason
+from .rtp import rtp_timestamp_for_seq
+from .rtsp import RTSPReason, DmapList, DmapItem
 from .exceptions import RTSPClientAlreadyConnected
 from .rtsp import RTSPStatus, RTSPClient, RAOPCrypto, RAOPCodec
 from .util import binary_ip_to_string
@@ -122,7 +123,10 @@ class RAOPReceiver(object):
             raise RTSPClientAlreadyConnected("The RTSP client for {0} is already connected.".format(str(self)))
 
         # connect to the rtsp client
-        self._rtsp_client.start_handshake(udp_ports, next_seq, password, credentials, volume=volume)
+        self._rtsp_client.start_handshake(udp_ports, next_seq, rtp_timestamp_for_seq(next_seq, include_latency=True),
+                                          password, credentials)
+        # set an initial volume
+        self._rtsp_client.set_volume(volume)
         return True
 
     def repair_connection(self, next_seq):
@@ -133,7 +137,7 @@ class RAOPReceiver(object):
         """
         if self._rtsp_client.status == RTSPStatus.CLOSED:
             # repair the rtsp connection
-            self._rtsp_client.repair_connection(next_seq)
+            self._rtsp_client.repair_connection(next_seq, rtp_timestamp_for_seq(next_seq, include_latency=True))
 
             return True
 
@@ -151,12 +155,14 @@ class RAOPReceiver(object):
     @property
     def is_connected(self):
         return self._rtsp_is_connected
+    # endregion
 
+    # region control / metadata
     def flush(self, seq):
         """
         Send a flush request.
         """
-        return self._rtsp_client.flush(seq)
+        return self._rtsp_client.flush(seq, rtp_timestamp_for_seq(seq, include_latency=True))
 
     def set_progress(self, start_seq, current_seq, last_seq):
         """
@@ -165,6 +171,42 @@ class RAOPReceiver(object):
         :param current_seq: sequence number of the current audio packet
         :param last_seq: sequence number of the last audio packet
         """
-        return self._rtsp_client.set_progress([start_seq, current_seq, last_seq])
+        # calculate rtp timestamp for each sequence number
+        start_rtp = rtp_timestamp_for_seq(start_seq, include_latency=True)
+        cur_rtp = rtp_timestamp_for_seq(current_seq, include_latency=True)
+        end_rtp = rtp_timestamp_for_seq(last_seq, include_latency=True)
 
+        return self._rtsp_client.set_progress([start_rtp, cur_rtp, end_rtp])
+
+    def set_track_info(self, start_seq, title="", artist="", album=""):
+        """
+        Set the current track information for the playing tack.
+        :param start_seq: start sequence of the current track
+        :param title: track title name
+        :param artist: track artist name
+        :param album: track album name
+        :return: True on success, False otherwise
+        """
+        return self._rtsp_client.set_track_info(
+            rtp_timestamp_for_seq(start_seq, include_latency=True),
+            DmapList(
+                itemname=title,
+                songartist=artist,
+                songalbum=album
+            )
+        )
+
+    def set_artwork_data(self, start_seq, data, mime):
+        """
+        Set the current artwork for the playing tack.
+        :param start_seq: start sequence of the current track
+        :param data: base64 encoded image data
+        :param mime: image mime type
+        :return: True on success, False otehrwise
+        """
+        return self._rtsp_client.set_artwork_data(
+            rtp_timestamp_for_seq(start_seq, include_latency=True),
+            data,
+            mime
+        )
     # endregion
