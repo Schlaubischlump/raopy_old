@@ -1,6 +1,7 @@
 # RAOPY
 
-AirPlay audio for the rest of us. An (hopefully) easy to use implementation of the AirTunes v2 Protocol. 
+WIP: I will probably never finish this. But it might be helpfull to some people out there. 
+AirPlay audio for the rest of us. An (hopefully) easy to use implementation of the AirTunes v2 Protocol.
 
 ## Todo
 - Cleanup the code! 
